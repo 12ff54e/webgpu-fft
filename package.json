@@ -1,0 +1,11 @@
+{
+  "name": "@12ff54e/webgpu-fft",
+  "version": "0.1.0",
+  "description": "Small batched WebGPU complex FFTs with f32 and paired-f32 precision",
+  "type": "module",
+  "exports": {".": {"types": "./src/index.d.ts", "import": "./src/index.js"}},
+  "files": ["src", "shaders", "include", "CMakeLists.txt", "README.md", "LICENSE"],
+  "scripts": {"generate": "node scripts/embed.mjs", "test": "node scripts/embed.mjs --check && node tests/api.mjs"},
+  "license": "MIT",
+  "repository": {"type": "git", "url": "https://github.com/12ff54e/webgpu-fft.git"}
+}

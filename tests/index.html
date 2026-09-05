@@ -1,0 +1,53 @@
+<!doctype html><meta charset="utf-8"><title>WebGPU FFT correctness and benchmark</title>
+<pre id="log">Requesting GPU…</pre>
+<script type="module">
+import {FFTPlan} from './src/index.js';
+const log = document.querySelector('#log');
+const line = text => { log.textContent += '\n' + text; };
+try {
+  const adapter = await navigator.gpu.requestAdapter({powerPreference:'high-performance'});
+  const device = await adapter.requestDevice();
+  device.addEventListener('uncapturederror', event => { throw event.error; });
+  const cases = await (await fetch('cases.json')).json();
+  for (const test of cases) for (const implementation of ['cpp', 'js']) {
+    const {n,paired,inverse,shader} = test;
+    const batch = 4, input = new Float32Array(batch*n*4);
+    for (let b=0;b<batch;b++) for(let j=0;j<n;j++) {
+      const i=4*(b*n+j);
+      input[i]=b===0 ? Number(j===0) : Math.sin(j*.37+b)+.1*Math.cos(j*.73);
+      input[i+1]=b===0 ? 0 : Math.cos(j*.43+b);
+      if(paired) {input[i+2]=Math.sin(j*.71)*1e-8;input[i+3]=Math.cos(j*.31)*1e-8;}
+    }
+    const create = (size,usage) => device.createBuffer({size,usage});
+    const offset=256;
+    const a=create(offset+input.byteLength,GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST);
+    const b=create(offset+input.byteLength,GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_SRC);
+    const read=create(input.byteLength,GPUBufferUsage.MAP_READ|GPUBufferUsage.COPY_DST);
+    device.pushErrorScope('validation');
+    device.queue.writeBuffer(a,offset,input);
+    const encoder=device.createCommandEncoder();
+    if(implementation==='js') {
+      const plan=await FFTPlan.create(device,{length:n,precision:paired?'paired-f32':'f32',inverse:Boolean(inverse)});
+      plan.bind(a,b,{batchCount:batch,inputOffset:offset,outputOffset:offset}).encode(encoder);
+    } else {
+      const pipeline=await device.createComputePipelineAsync({layout:'auto',compute:{module:device.createShaderModule({code:shader}),entryPoint:'main'}});
+      const group=device.createBindGroup({layout:pipeline.getBindGroupLayout(0),entries:[{binding:0,resource:{buffer:a,offset,size:input.byteLength}},{binding:1,resource:{buffer:b,offset,size:input.byteLength}}]});
+      const pass=encoder.beginComputePass();pass.setPipeline(pipeline);pass.setBindGroup(0,group);pass.dispatchWorkgroups(batch);pass.end();
+    }
+    encoder.copyBufferToBuffer(b,offset,read,0,input.byteLength);device.queue.submit([encoder.finish()]);
+    await read.mapAsync(GPUMapMode.READ);
+    const actual=new Float32Array(read.getMappedRange());let error=0;
+    for(let seq=0;seq<batch;seq++) for(let k=0;k<n;k++) {
+      let real=0,imag=0;
+      for(let j=0;j<n;j++) {const angle=(inverse?2:-2)*Math.PI*j*k/n,co=Math.cos(angle),si=Math.sin(angle),i=4*(seq*n+j),r=input[i]+input[i+2],im=input[i+1]+input[i+3];real+=r*co-im*si;imag+=r*si+im*co;}
+      if(inverse){real/=n;imag/=n;}const i=4*(seq*n+k);
+      error=Math.max(error,Math.abs(actual[i]+actual[i+2]-real)/(1+Math.abs(real)),Math.abs(actual[i+1]+actual[i+3]-imag)/(1+Math.abs(imag)));
+    }
+    read.unmap();const validation=await device.popErrorScope();if(validation)throw validation;
+    if(!Number.isFinite(error)||error>(paired?3e-11:1e-4))throw Error(`FFT n=${n} paired=${paired} inverse=${inverse}: error=${error}`);
+    line(`PASS ${implementation} n=${n} paired=${paired} inverse=${inverse} max scaled error=${error.toExponential(3)}`);
+    a.destroy();b.destroy();read.destroy();
+  }
+  document.body.dataset.status='pass';line('All FFT tests PASS');
+} catch(error) {document.body.dataset.status='fail';line(error.stack||String(error));}
+</script>
