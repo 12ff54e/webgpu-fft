@@ -42,6 +42,10 @@ npm install github:12ff54e/webgpu-fft
 npm install --save-dev @webgpu/types
 ```
 
+The declaration file uses ambient WebGPU types: recent TypeScript DOM
+libraries provide them directly; older toolchains can add `@webgpu/types` to
+their `tsconfig.json` `types` list. Do not load both incompatible definitions.
+
 ```js
 import {FFTPlan} from '@12ff54e/webgpu-fft';
 // Browser without a bundler: import {FFTPlan} from './webgpu-fft/src/index.js';
@@ -103,6 +107,7 @@ namespace alias. No Emscripten toolchain is needed for the native generator.
 cmake -S . -B build
 cmake --build build
 ctest --test-dir build --output-on-failure
+npm ci
 npm test
 python3 -m http.server 8080 --directory build
 ```
@@ -133,6 +138,8 @@ The numerical kernels in `shaders/` are shared by the two language frontends.
 After editing them run `npm run generate`; generated C++/JS embeddings are
 checked in, so consumers need no generator. Stage emission is intentionally
 small in each language and is tested independently against the same CPU oracle.
+Measured adapter-specific results, including a case where paired-f32 FFT is
+slower than direct DFT, are recorded in [docs/qualification.md](docs/qualification.md).
 
 ## Limits and roadmap
 

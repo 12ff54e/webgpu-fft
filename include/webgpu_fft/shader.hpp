@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <iomanip>
+#include <locale>
 #include <numbers>
 #include <sstream>
 #include <stdexcept>
@@ -28,6 +29,7 @@ inline std::string shader(int length, bool paired, bool inverse = false) {
         }
     }
     std::ostringstream out;
+    out.imbue(std::locale::classic());
     out << std::setprecision(9);
     out << "const N = " << length << "u;\n"
         << "@group(0) @binding(0) var<storage,read> input: array<vec4f>;\n"

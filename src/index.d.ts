@@ -1,4 +1,4 @@
-/// <reference types="@webgpu/types" />
+// Uses WebGPU globals from the consumer's DOM library or @webgpu/types.
 export interface FFTOptions {
   length: number;
   precision?: 'f32' | 'paired-f32';
