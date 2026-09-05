@@ -5,7 +5,8 @@
 Tested on the same Windows Chrome / RTX 3060 Ti session described below.
 Both public language APIs preserve the existing small C2C path and add real
 packing plus device-resident multipass radix-2/Bluestein transforms. All 197
-extended browser cases passed.
+extended browser cases passed. All 136 original small-transform browser cases
+also passed again after the extension.
 
 - Expanded JS tests cover real/complex transforms and both precisions through
   lengths 65,536 and 65,537, with independent reduced-phase CPU DFT checks,
@@ -31,6 +32,24 @@ extended browser cases passed.
 The immutable Bluestein convolution kernel is prepared with a host double
 FFT during setup. All transforms of caller data, packing, spectral products,
 and normalization execute on GPU, without per-execution uploads/readbacks.
+
+### Large-transform benchmark smoke
+
+128 contiguous C2C batches, 50 repetitions per sample, seven samples after
+warmup, same Chrome/RTX session. Queue-completion wall timing includes command
+encoding/submission, but excludes setup, uploads, and readbacks.
+
+| Length / path | Precision | Median ms/pass | Range ms/pass |
+| --- | --- | ---: | ---: |
+| 1024 / radix-2 | f32 | 0.198 | 0.159–2.138 |
+| 1024 / radix-2 | paired-f32 | 0.377 | 0.361–0.381 |
+| 1009 / Bluestein | f32 | 0.660 | 0.640–3.379 |
+| 1009 / Bluestein | paired-f32 | 1.280 | 1.278–1.319 |
+
+Some scalar samples had substantial browser/queue scheduling outliers. These
+are reproducibility records, not GPU timestamp measurements or universal
+performance claims. Preliminary five-repetition runs were too noisy for
+comparison and are omitted. No large direct-DFT comparison was performed.
 
 ## 0.1 small-transform baseline
 
