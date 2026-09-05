@@ -1,17 +1,39 @@
 import assert from 'node:assert/strict';
-import {FFTPlan, shader} from '../src/index.js';
+import {FFTPlan, program, shader} from '../src/index.js';
 for (const length of [0, 1, 257, 4.5, NaN])
   assert.throws(() => shader({length}), RangeError);
 assert.throws(() => shader({length: 36, precision: 'double'}), TypeError);
 assert.throws(() => shader({length: 36, inverse: 1}), TypeError);
+assert.throws(() => shader({length: 36, transform: 'r2c'}), TypeError);
+for (const length of [0, 1, 1048577, 2.5, NaN])
+  assert.throws(() => program({length}), RangeError);
+assert.throws(() => program({length: 257, transform: 'bad'}), TypeError);
+for (const n of [3, 36, 257, 1024]) {
+  const real = program({length: n, transform: 'r2c', inverse: true});
+  assert.equal(real.input_bytes, 8 * n);
+  assert.equal(real.output_bytes, 16 * (Math.floor(n / 2) + 1));
+  assert.equal(real.inverse, false);
+  const inverse = program({length: n, transform: 'c2r', inverse: false});
+  assert.equal(inverse.input_bytes, real.output_bytes);
+  assert.equal(inverse.output_bytes, real.input_bytes);
+  assert.equal(inverse.inverse, true);
+  if (real.bluestein) {
+    assert.ok(real.fft_length >= 2 * n - 1);
+    assert.equal(real.fft_length & (real.fft_length - 1), 0);
+  }
+}
 for (const length of [2, 7, 36, 256])
   assert.match(shader({length}), new RegExp(`@workgroup_size\\(${length}\\)`));
 const device = {
   limits: {maxComputeWorkgroupsPerDimension: 65535, minStorageBufferOffsetAlignment: 256,
-    maxStorageBufferBindingSize: 134217728},
+    maxStorageBufferBindingSize: 134217728, maxBufferSize: 268435456},
   createShaderModule: ({code}) => ({code}),
   createComputePipelineAsync: async () => ({getBindGroupLayout: () => ({})}),
   createBindGroup: descriptor => descriptor,
+  createBindGroupLayout: descriptor => descriptor,
+  createPipelineLayout: descriptor => descriptor,
+  createBuffer: descriptor => ({...descriptor, destroy() {this.destroyed = true;}}),
+  queue: {writeBuffer() {}},
 };
 const plan = await FFTPlan.create(device, {length: 36});
 const input = {size: 4096, usage: 128}, output = {size: 4096, usage: 128};
@@ -25,4 +47,22 @@ plan.bind(input, output, {batchCount: 4, inputOffset: 256}).encode({beginCompute
   setPipeline() {}, setBindGroup() {}, dispatchWorkgroups(n) {dispatched = n;}, end() {},
 })});
 assert.equal(dispatched, 4);
+const real = await FFTPlan.create(device, {length: 257, transform: 'r2c'});
+assert.throws(() => real.bind({size: 8 * 257 - 4, usage: 128}, output), RangeError);
+assert.throws(() => real.bind(input, {size: 16 * 129 - 4, usage: 128}), RangeError);
+const binding = real.bind(input, output);
+binding.destroy();
+assert.throws(() => binding.encode({beginComputePass() {return {};}}), /destroyed/);
+real.destroy();
+assert.throws(() => real.bind(input, output), /destroyed/);
+const smallLimits = {...device, limits: {...device.limits, maxStorageBufferBindingSize: 8192}};
+await assert.rejects(() => FFTPlan.create(smallLimits, {length: 4093}), RangeError);
+const grid = {...device, limits: {...device.limits, maxComputeWorkgroupsPerDimension: 128}};
+const large = await FFTPlan.create(grid, {length: 4096});
+const largeBinding = large.bind({size: 1 << 20, usage: 128}, {size: 1 << 20, usage: 128}, {batchCount: 3});
+const dispatches = [];
+largeBinding.dispatch({setPipeline() {}, setBindGroup() {}, dispatchWorkgroups(x, y) {dispatches.push([x, y]);}});
+assert.ok(dispatches.length > 1);
+assert.ok(dispatches.every(([x, y]) => x === 128 && y === 2));
+largeBinding.destroy(); large.destroy();
 console.log('JS API validation PASS');

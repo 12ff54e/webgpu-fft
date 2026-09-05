@@ -1,99 +1,89 @@
-import {arithmetic, paired, scalar} from './source.js';
+import {program} from './program.js';
+export {program} from './program.js';
+export {shader} from './shader.js';
 
-function options({length, precision = 'f32', inverse = false}) {
-  if (!Number.isInteger(length) || length < 2 || length > 256)
-    throw new RangeError('FFT length must be an integer in [2,256]');
-  if (precision !== 'f32' && precision !== 'paired-f32')
-    throw new TypeError('FFT precision must be f32 or paired-f32');
-  if (typeof inverse !== 'boolean') throw new TypeError('FFT inverse must be boolean');
-  return {length, precision, inverse};
-}
-
-/** Emit WGSL independently of the browser; no WebGPU globals are accessed. */
-export function shader(config) {
-  const {length: n, precision, inverse} = options(config);
-  const radices = [];
-  for (let r = 2, remaining = n; remaining > 1; ++r)
-    while (remaining % r === 0) {radices.push(r); remaining /= r;}
-  const f = value => `${Math.fround(value).toPrecision(9)}f`;
-  let code = `const N = ${n}u;
-@group(0) @binding(0) var<storage,read> input: array<vec4f>;
-@group(0) @binding(1) var<storage,read_write> output: array<vec4f>;
-var<workgroup> values: array<vec4f,${n}>;
-var<workgroup> rounding: array<atomic<u32>,${n}>;
-${arithmetic}
-const roots = array<vec4f,${n}>(\n`;
-  for (let k = 0; k < n; ++k) {
-    const angle = (inverse ? 2 : -2) * Math.PI * k / n;
-    const r = Math.cos(angle), i = Math.sin(angle);
-    code += `vec4f(${f(r)},${f(i)},${f(r - Math.fround(r))},${f(i - Math.fround(i))}),\n`;
-  }
-  code += `);\n${precision === 'paired-f32' ? paired : scalar}
-@compute @workgroup_size(${n})
-fn main(@builtin(local_invocation_index) lane:u32,@builtin(workgroup_id) group:vec3u){
-let base=group.x*N;values[lane]=input[base+lane];workgroupBarrier();\n`;
-  let span = n;
-  for (const radix of radices) {
-    const step = span / radix;
-    code += `{let block=lane/${span}u;let j=lane%${step}u;let q=(lane%${span}u)/${step}u;
-var sum=vec4f(0.0);for(var p=0u;p<${radix}u;p++){
-let v=values[block*${span}u+j+p*${step}u];
-sum=cadd(sum,cmul(v,roots[(p*q*${n / radix}u)%N],lane),lane);}
-let value=cmul(sum,roots[(q*j*${n / span}u)%N],lane);workgroupBarrier();values[lane]=value;workgroupBarrier();}\n`;
-    span = step;
-  }
-  code += 'var k=lane;var index=0u;\n';
-  span = n;
-  for (const radix of radices) {
-    span /= radix;
-    code += `index+=(k%${radix}u)*${span}u;k/=${radix}u;\n`;
-  }
-  code += inverse
-    ? `output[base+lane]=cmul(values[index],vec4f(${f(1 / n)},0.0,${f(1 / n - Math.fround(1 / n))},0.0),lane);\n`
-    : 'output[base+lane]=values[index];\n';
-  return code + '}\n';
-}
-
-/** Reusable compiled FFT. No buffer allocation, submission, or readback. */
+/** Compile once; bind allocates reusable scratch for real/large transforms. */
 export class FFTPlan {
   static async create(device, config) {
-    const normalized = options(config);
-    const module = device.createShaderModule({label: 'webgpu-fft', code: shader(normalized)});
-    const pipeline = await device.createComputePipelineAsync({
-      label: 'webgpu-fft', layout: 'auto', compute: {module, entryPoint: 'main'},
-    });
-    return new FFTPlan(device, pipeline, normalized);
-  }
-  constructor(device, pipeline, config) {
-    this.device = device;
-    this.pipeline = pipeline;
-    this.length = config.length;
-    this.precision = config.precision;
-    this.inverse = config.inverse;
-  }
-  /** Bind once, encode many times. Offsets are bytes; transforms are contiguous. */
-  bind(input, output, {batchCount = 1, inputOffset = 0, outputOffset = 0} = {}) {
-    const limit = this.device.limits.maxComputeWorkgroupsPerDimension;
-    if (!Number.isInteger(batchCount) || batchCount < 1 || batchCount > limit)
-      throw new RangeError(`FFT batchCount must be an integer in [1,${limit}]`);
-    if (input === output) throw new TypeError('FFT requires distinct input and output buffers');
-    const size = batchCount * this.length * 16;
-    for (const [buffer, offset] of [[input, inputOffset], [output, outputOffset]]) {
-      if (!Number.isSafeInteger(offset) || offset < 0 ||
-          offset % this.device.limits.minStorageBufferOffsetAlignment !== 0)
-        throw new RangeError('FFT buffer offset must be nonnegative and storage-aligned');
-      if (offset + size > buffer.size || size > this.device.limits.maxStorageBufferBindingSize)
-        throw new RangeError('FFT binding exceeds buffer size or device binding limit');
-      if ((buffer.usage & 128) === 0) throw new TypeError('FFT buffers require STORAGE usage');
+    const description=program(config),pipelines=new Map();let layout,table;
+    if(description.code){
+      if(description.table.byteLength>device.limits.maxStorageBufferBindingSize || description.table.byteLength>device.limits.maxBufferSize)
+        throw new RangeError('FFT table exceeds device buffer limits');
+      layout=device.createBindGroupLayout({entries:[
+        {binding:0,visibility:4,buffer:{type:'read-only-storage'}},{binding:1,visibility:4,buffer:{type:'storage'}},
+        {binding:2,visibility:4,buffer:{type:'read-only-storage'}},{binding:3,visibility:4,buffer:{type:'uniform'}},
+      ]});
+      const pipelineLayout=device.createPipelineLayout({bindGroupLayouts:[layout]});
+      const module=device.createShaderModule({label:'webgpu-fft multipass',code:description.code});
+      for(const entryPoint of new Set(description.stages.map(s=>s.entry_point).filter(s=>s!=='main')))
+        pipelines.set(entryPoint,await device.createComputePipelineAsync({layout:pipelineLayout,compute:{module,entryPoint}}));
     }
-    const group = this.device.createBindGroup({layout: this.pipeline.getBindGroupLayout(0), entries: [
-      {binding: 0, resource: {buffer: input, offset: inputOffset, size}},
-      {binding: 1, resource: {buffer: output, offset: outputOffset, size}},
-    ]});
-    const pipeline = this.pipeline;
+    if(description.small_code){
+      const module=device.createShaderModule({label:'webgpu-fft',code:description.small_code});
+      pipelines.set('main',await device.createComputePipelineAsync({layout:'auto',compute:{module,entryPoint:'main'}}));
+    }
+    if(description.code){
+      table=device.createBuffer({size:description.table.byteLength,usage:128|8});
+      device.queue.writeBuffer(table,0,description.table);
+      description.table=new Float32Array(0); // writeBuffer copies data during setup.
+    }
+    return new FFTPlan(device,description,pipelines,layout,table);
+  }
+  constructor(device,description,pipelines,layout,table){
+    this.device=device;this.length=description.length;this.precision=description.paired?'paired-f32':'f32';
+    this.inverse=description.inverse;this.transform=description.transform;
+    this.pipeline=pipelines.get('main');this.description=description;this.pipelines=pipelines;
+    this.layout=layout;this.table=table;this.destroyed=false;
+  }
+  /** Destroys only plan-owned tables, never caller data. Finish GPU use first. */
+  destroy(){if(!this.destroyed){this.table?.destroy();this.destroyed=true;}}
+  bind(input,output,{batchCount=1,inputOffset=0,outputOffset=0}={}){
+    if(this.destroyed)throw Error('FFT plan was destroyed');
+    const device=this.device,limits=device.limits,p=this.description;
+    if(!Number.isSafeInteger(batchCount)||batchCount<1)throw new RangeError('FFT batchCount must be a positive integer');
+    if(p.small&&batchCount>limits.maxComputeWorkgroupsPerDimension)throw new RangeError('FFT batchCount exceeds workgroup limit');
+    if(input===output)throw new TypeError('FFT requires distinct input and output buffers');
+    const sizes=[p.input_bytes*batchCount,p.output_bytes*batchCount],scratchSize=16*p.fft_length*batchCount;
+    for(const [buffer,offset,size] of [[input,inputOffset,sizes[0]],[output,outputOffset,sizes[1]]]){
+      if(!Number.isSafeInteger(offset)||offset<0||offset%limits.minStorageBufferOffsetAlignment!==0)
+        throw new RangeError('FFT buffer offset must be nonnegative and storage-aligned');
+      if(!Number.isSafeInteger(size)||offset+size>buffer.size||size>limits.maxStorageBufferBindingSize)
+        throw new RangeError('FFT binding exceeds buffer size or device binding limit');
+      if((buffer.usage&128)===0)throw new TypeError('FFT buffers require STORAGE usage');
+    }
+    const resources=[],passes=[];
+    if(p.stages.length>1&&(scratchSize>limits.maxStorageBufferBindingSize||scratchSize>limits.maxBufferSize))
+      throw new RangeError('FFT scratch exceeds device buffer limits');
+    const groups=Math.ceil(p.fft_length*batchCount/64),gx=Math.min(groups,limits.maxComputeWorkgroupsPerDimension),gy=Math.ceil(groups/gx);
+    if(gy>limits.maxComputeWorkgroupsPerDimension)throw new RangeError('FFT dispatch exceeds device limits');
+    try{
+      const scratch=p.stages.length>1?[0,1].map(()=>{const b=device.createBuffer({size:scratchSize,usage:128});resources.push(b);return b;}):[];
+      for(let i=0;i<p.stages.length;i++){
+        const stage=p.stages[i],small=stage.entry_point==='main',pipeline=small?this.pipeline:this.pipelines.get(stage.entry_point);
+        const entries=[
+          {binding:0,resource:i===0?{buffer:input,offset:inputOffset,size:sizes[0]}:{buffer:scratch[(i-1)%2],size:scratchSize}},
+          {binding:1,resource:i===p.stages.length-1?{buffer:output,offset:outputOffset,size:sizes[1]}:{buffer:scratch[i%2],size:scratchSize}},
+        ];
+        if(!small){
+          const uniform=device.createBuffer({size:32,usage:64|8});resources.push(uniform);
+          device.queue.writeBuffer(uniform,0,new Uint32Array([p.length,p.fft_length,batchCount,stage.span,['c2c','r2c','c2r'].indexOf(p.transform),stage.flags,0,0]));
+          entries.push({binding:2,resource:{buffer:this.table}},{binding:3,resource:{buffer:uniform}});
+        }
+        const group=device.createBindGroup({layout:small?pipeline.getBindGroupLayout(0):this.layout,entries});
+        passes.push({pipeline,group,x:small?batchCount:gx,y:small?1:gy});
+      }
+    }catch(error){for(const resource of resources)resource.destroy();throw error;}
+    let destroyed=false;const owner=this;
     return Object.freeze({
-      dispatch(pass) {pass.setPipeline(pipeline); pass.setBindGroup(0, group); pass.dispatchWorkgroups(batchCount);},
-      encode(encoder) {const pass = encoder.beginComputePass(); this.dispatch(pass); pass.end();},
+      dispatch(pass){
+        if(destroyed||owner.destroyed)throw Error('FFT binding or plan was destroyed');
+        for(const p of passes){pass.setPipeline(p.pipeline);pass.setBindGroup(0,p.group);pass.dispatchWorkgroups(p.x,p.y);}
+      },
+      encode(encoder){
+        if(destroyed||owner.destroyed)throw Error('FFT binding or plan was destroyed');
+        const pass=encoder.beginComputePass();this.dispatch(pass);pass.end();
+      },
+      destroy(){if(!destroyed){for(const resource of resources)resource.destroy();destroyed=true;}},
     });
   }
 }

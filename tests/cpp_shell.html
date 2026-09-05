@@ -1,0 +1,11 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Emdawnwebgpu C++ FFT runtime</title></head>
+<body><pre id="log">Loading Emscripten C++ FFT runtime…</pre>
+<script>
+var Module = {
+  print: text => {document.querySelector('#log').textContent += '\n' + text;},
+  printErr: text => {document.querySelector('#log').textContent += '\n' + text;},
+  onAbort: text => {document.body.dataset.status='fail';document.querySelector('#log').textContent+='\n'+text;}
+};
+</script>
+{{{ SCRIPT }}}
+</body></html>

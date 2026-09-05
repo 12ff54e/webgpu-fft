@@ -1,5 +1,5 @@
 <!doctype html><meta charset="utf-8"><title>WebGPU FFT benchmark</title>
-<p>Queue-completion wall time; includes command encoding/submission, excludes initialization, uploads and readback. Close other GPU workloads. Optional URL parameters: n=36&amp;batch=4096&amp;repeats=10.</p>
+<p>Queue-completion wall time; includes command encoding/submission, excludes initialization, uploads and readback. Keep this tab in the foreground and close other GPU workloads. Optional URL parameters: n=36&amp;batch=4096&amp;repeats=10. Larger lengths report FFT throughput without the small-workgroup DFT comparison.</p>
 <button id="start">Run benchmark</button><pre id="log"></pre>
 <script type="module">
 import {FFTPlan, shader} from './src/index.js';
@@ -8,26 +8,33 @@ document.querySelector('#start').onclick = async () => {
   const button=document.querySelector('#start');button.disabled=true;
   try {
     const query=new URLSearchParams(location.search);
-    const n=Number(query.get('n')||36),batch=Number(query.get('batch')||4096),repeats=Number(query.get('repeats')||10);
+    const n=Number(query.get('n')||36),batch=Number(query.get('batch')||Math.max(1,Math.min(4096,Math.floor(262144/n)))),repeats=Number(query.get('repeats')||10);
     if(!Number.isInteger(repeats)||repeats<1||repeats>100)throw Error('repeats must be in [1,100]');
     const adapter=await navigator.gpu.requestAdapter({powerPreference:'high-performance'}),device=await adapter.requestDevice();
     log.textContent=`Adapter: ${adapter.info?.description||adapter.info?.device||'not exposed'}\nN=${n}, batches=${batch}, passes/sample=${repeats}\n`;
     const size=n*batch*16,a=device.createBuffer({size,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST}),b=device.createBuffer({size,usage:GPUBufferUsage.STORAGE});
     const input=new Float32Array(size/4);for(let j=0;j<input.length;j+=4){input[j]=Math.sin(j*.3);input[j+1]=Math.cos(j*.2);input[j+2]=1e-8;}
     device.queue.writeBuffer(a,0,input);
-    for(const precision of ['f32','paired-f32']) for(const algorithm of ['FFT','DFT']) {
-      const plan=await FFTPlan.create(device,{length:n,precision});
+    for(const precision of ['f32','paired-f32']) for(const algorithm of (n<=256?['FFT','DFT']:['FFT'])) {
+      device.pushErrorScope('validation');
+      let plan,binding;
       if(algorithm==='DFT') {
         const prefix=shader({length:n,precision}).split('@compute')[0];
         const code=prefix+`@compute @workgroup_size(${n}) fn main(@builtin(local_invocation_index) lane:u32,@builtin(workgroup_id) group:vec3u){let base=group.x*N;values[lane]=input[base+lane];workgroupBarrier();var sum=vec4f(0.0);for(var j=0u;j<N;j++){sum=cadd(sum,cmul(values[j],roots[(j*lane)%N],lane),lane);}output[base+lane]=sum;}`;
-        plan.pipeline=await device.createComputePipelineAsync({layout:'auto',compute:{module:device.createShaderModule({code}),entryPoint:'main'}});
+        const pipeline=await device.createComputePipelineAsync({layout:'auto',compute:{module:device.createShaderModule({code}),entryPoint:'main'}});
+        const group=device.createBindGroup({layout:pipeline.getBindGroupLayout(0),entries:[{binding:0,resource:{buffer:a}},{binding:1,resource:{buffer:b}}]});
+        binding={encode(encoder){const pass=encoder.beginComputePass();pass.setPipeline(pipeline);pass.setBindGroup(0,group);pass.dispatchWorkgroups(batch);pass.end();}};
+      } else {
+        plan=await FFTPlan.create(device,{length:n,precision});
+        binding=plan.bind(a,b,{batchCount:batch});
       }
-      const binding=plan.bind(a,b,{batchCount:batch});
       const run=async count=>{const encoder=device.createCommandEncoder();for(let j=0;j<count;j++)binding.encode(encoder);device.queue.submit([encoder.finish()]);await device.queue.onSubmittedWorkDone();};
       await run(3);const samples=[];
       for(let j=0;j<7;j++){const start=performance.now();await run(repeats);samples.push((performance.now()-start)/repeats);}
+      const validation=await device.popErrorScope();if(validation)throw validation;
       samples.sort((a,b)=>a-b);const ms=samples[3];
       log.textContent+=`${algorithm} ${precision}: median ${ms.toFixed(3)} ms/pass; ${(batch/(ms*1e-3)).toFixed(0)} transforms/s; range ${samples[0].toFixed(3)}–${samples[6].toFixed(3)} ms\n`;
+      binding.destroy?.();plan?.destroy?.();
     }
     a.destroy();b.destroy();device.destroy();document.body.dataset.status='pass';
   }catch(error){log.textContent+='\n'+(error.stack||String(error));document.body.dataset.status='fail';}

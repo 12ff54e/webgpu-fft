@@ -1,7 +1,7 @@
 {
   "name": "@12ff54e/webgpu-fft",
-  "version": "0.1.0",
-  "description": "Small batched WebGPU complex FFTs with f32 and paired-f32 precision",
+  "version": "0.2.0",
+  "description": "Batched WebGPU complex and real FFTs with arbitrary-length and paired-f32 support",
   "type": "module",
   "exports": {
     ".": {
@@ -15,6 +15,7 @@
     "include",
     "CMakeLists.txt",
     "cmake",
+    "docs",
     "README.md",
     "LICENSE"
   ],

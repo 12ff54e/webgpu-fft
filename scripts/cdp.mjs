@@ -10,8 +10,9 @@ if (command === 'open') {
   if (!page) throw Error(`No Chrome target ${target}`);
   const ws = new WebSocket(page.webSocketDebuggerUrl);
   const timeout = setTimeout(() => {console.error('CDP timeout');process.exit(2);}, 60000);
-  ws.onopen = () => ws.send(JSON.stringify({id: 1, method: 'Runtime.evaluate',
-    params: {expression, returnByValue: true, awaitPromise: true}}));
+  ws.onopen = () => ws.send(JSON.stringify({id: 1,
+    method: command === 'activate' ? 'Page.bringToFront' : 'Runtime.evaluate',
+    params: command === 'activate' ? {} : {expression, returnByValue: true, awaitPromise: true}}));
   ws.onmessage = event => {
     const reply = JSON.parse(event.data);
     if (reply.id !== 1) return;

@@ -1,0 +1,208 @@
+<!doctype html><meta charset="utf-8"><title>WebGPU FFT extended transforms</title>
+<pre id="log">Requesting GPU…</pre>
+<script type="module">
+import {FFTPlan} from './src/index.js';
+import {frequencies, directComplex, directReal, directHermitian, samples} from './reference.mjs';
+const log = document.querySelector('#log');
+const line = message => {log.textContent += '\n' + message;};
+let tests = 0, fatal;
+try {
+  const adapter = await navigator.gpu.requestAdapter({powerPreference: 'high-performance'});
+  const device = await adapter.requestDevice();
+  device.addEventListener('uncapturederror', event => {fatal = event.error;});
+  const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST;
+  const offset = device.limits.minStorageBufferOffsetAlignment;
+  async function execute(n, paired, transform, inverse, input, batchCount, native) {
+    const outputCount = transform === 'r2c' ? 4 * (Math.floor(n / 2) + 1) : transform === 'c2r' ? 2 * n : 4 * n;
+    const outputBytes = outputCount * batchCount * 4;
+    const a = device.createBuffer({size: offset + input.byteLength, usage});
+    const b = device.createBuffer({size: offset + outputBytes + 256, usage});
+    const read = device.createBuffer({size: outputBytes + 256, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST});
+    let plan, binding;
+    device.pushErrorScope('validation');
+    try {
+      device.queue.writeBuffer(a, offset, input);
+      // A guard after the output detects stores beyond the logical range.
+      device.queue.writeBuffer(b, offset + outputBytes, new Uint32Array(64).fill(0x12345678));
+      if (native) binding = await nativeBinding(native, a, b, input.byteLength, outputBytes, batchCount);
+      else {
+        plan = await FFTPlan.create(device, {length: n, precision: paired ? 'paired-f32' : 'f32', transform, inverse});
+        binding = plan.bind(a, b, {batchCount, inputOffset: offset, outputOffset: offset});
+      }
+      // Reuse the same binding twice, including two encodings in one encoder.
+      const encoder = device.createCommandEncoder();
+      binding.encode(encoder); binding.encode(encoder);
+      encoder.copyBufferToBuffer(b, offset, read, 0, outputBytes + 256);
+      device.queue.submit([encoder.finish()]);
+      await read.mapAsync(GPUMapMode.READ);
+      const mapped = read.getMappedRange(), words = new Uint32Array(mapped);
+      if (!words.subarray(outputBytes / 4).every(x => x === 0x12345678)) throw Error('output guard overwritten');
+      const result = new Float32Array(mapped).slice(0, outputBytes / 4);
+      read.unmap();
+      const error = await device.popErrorScope();
+      if (error) throw error;
+      if (fatal) throw fatal;
+      return result;
+    } finally {
+      binding?.destroy?.(); plan?.destroy?.(); a.destroy(); b.destroy(); read.destroy();
+    }
+  }
+
+  // Execute the independently emitted C++ schedule and WGSL. This does not
+  // call the JS planner or shader emitter, so their bugs cannot mask each other.
+  async function nativeBinding(program, input, output, inputBytes, outputBytes, batches) {
+    const scratchBytes = 16 * program.fft_length * batches;
+    const scratch = [0, 1].map(() => device.createBuffer({size: scratchBytes, usage}));
+    const tableData = new Float32Array(program.table);
+    const table = device.createBuffer({size: Math.max(16, tableData.byteLength), usage});
+    if (tableData.length) device.queue.writeBuffer(table, 0, tableData);
+    const parameters = [], stages = [], pipelines = new Map();
+    const generic = program.code && device.createShaderModule({code: program.code});
+    const small = program.small_code && device.createShaderModule({code: program.small_code});
+    const layout = device.createPipelineLayout({bindGroupLayouts: [device.createBindGroupLayout({entries: [
+      {binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: {type: 'read-only-storage'}},
+      {binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: {type: 'storage'}},
+      {binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: {type: 'read-only-storage'}},
+      {binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: {type: 'uniform'}},
+    ]})]});
+    for (let i = 0; i < program.stages.length; ++i) {
+      const stage = program.stages[i], main = stage.entry_point === 'main';
+      if (!pipelines.has(stage.entry_point)) pipelines.set(stage.entry_point,
+        await device.createComputePipelineAsync({layout: main ? 'auto' : layout, compute: {module: main ? small : generic, entryPoint: stage.entry_point}}));
+      const pipeline = pipelines.get(stage.entry_point), first = i === 0, last = i === program.stages.length - 1;
+      const entries = [
+        {binding: 0, resource: {buffer: first ? input : scratch[(i - 1) % 2], offset: first ? offset : 0, size: first ? inputBytes : scratchBytes}},
+        {binding: 1, resource: {buffer: last ? output : scratch[i % 2], offset: last ? offset : 0, size: last ? outputBytes : scratchBytes}},
+      ];
+      if (!main) {
+        const params = device.createBuffer({size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST});
+        device.queue.writeBuffer(params, 0, new Uint32Array([program.length, program.fft_length, batches, stage.span, program.transform, stage.flags, 0, 0]));
+        parameters.push(params); entries.push({binding: 2, resource: {buffer: table}}, {binding: 3, resource: {buffer: params}});
+      }
+      const group = device.createBindGroup({layout: pipeline.getBindGroupLayout(0), entries});
+      const groups = main ? batches : Math.ceil(program.fft_length * batches / 64);
+      const x = Math.min(groups, device.limits.maxComputeWorkgroupsPerDimension), y = Math.ceil(groups / x);
+      stages.push({pipeline, group, x, y});
+    }
+    return {
+      encode(encoder) {for (const stage of stages) {const pass = encoder.beginComputePass(); pass.setPipeline(stage.pipeline); pass.setBindGroup(0, stage.group); pass.dispatchWorkgroups(stage.x, stage.y); pass.end();}},
+      destroy() {for (const buffer of [...scratch, table, ...parameters]) buffer.destroy();},
+    };
+  }
+
+  function compare(actual, expected, paired, n, context) {
+    const tolerance = paired ? 3e-11 : 3e-4;
+    let error = 0;
+    for (let i = 0; i < expected.length; ++i)
+      error = Math.max(error, Math.abs(actual[i] - expected[i]) / (1 + Math.abs(expected[i])));
+    if (!Number.isFinite(error) || error > tolerance) throw Error(`${context}: scaled error=${error}, gate=${tolerance}`);
+    return error;
+  }
+
+  const lengths = [2, 3, 7, 16, 31, 36, 127, 256, 257, 509, 1000, 1024, 4093, 4096, 16384, 65536, 65537];
+  for (const n of lengths) for (const paired of [false, true]) {
+    const batchCount = 2, bins = Math.floor(n / 2) + 1;
+    for (const inverse of [false, true]) {
+      const input = samples(n, batchCount, 4, paired);
+      const output = await execute(n, paired, 'c2c', inverse, input, batchCount);
+      let max = 0;
+      for (let batch = 0; batch < batchCount; ++batch) for (const k of frequencies(n)) {
+        const i = 4 * (batch * n + k);
+        max = Math.max(max, compare([output[i] + output[i + 2], output[i + 1] + output[i + 3]],
+          directComplex(input, n, batch, k, inverse), paired, n, `c2c n=${n} inverse=${inverse}`));
+      }
+      const restored = await execute(n, paired, 'c2c', !inverse, output, batchCount);
+      for (let i = 0; i < input.length; i += 4)
+        compare([restored[i] + restored[i + 2], restored[i + 1] + restored[i + 3]],
+          [input[i] + input[i + 2], input[i + 1] + input[i + 3]], paired, n, 'complex roundtrip');
+      ++tests; line(`PASS c2c n=${n} paired=${paired} inverse=${inverse} error=${max.toExponential(3)}`);
+    }
+
+    const real = samples(n, batchCount, 2, paired);
+    const spectrum = await execute(n, paired, 'r2c', false, real, batchCount);
+    let max = 0;
+    for (let batch = 0; batch < batchCount; ++batch) for (const k of frequencies(bins)) {
+      const i = 4 * (batch * bins + k);
+      max = Math.max(max, compare([spectrum[i] + spectrum[i + 2], spectrum[i + 1] + spectrum[i + 3]],
+        directReal(real, n, batch, k), paired, n, `r2c n=${n}`));
+    }
+    const restored = await execute(n, paired, 'c2r', true, spectrum, batchCount);
+    for (let i = 0; i < real.length; i += 2)
+      compare([restored[i] + restored[i + 1]], [real[i] + real[i + 1]], paired, n, `real roundtrip n=${n}`);
+    ++tests; line(`PASS r2c + roundtrip n=${n} paired=${paired} error=${max.toExponential(3)}`);
+
+    const half = samples(bins, batchCount, 4, paired);
+    for (let batch = 0; batch < batchCount; ++batch) {
+      const endpoints = n % 2 === 0 ? [0, n / 2] : [0];
+      for (const k of endpoints) {const i = 4 * (batch * bins + k); half[i + 1] = 0; half[i + 3] = 0;}
+    }
+    const inverseReal = await execute(n, paired, 'c2r', true, half, batchCount);
+    max = 0;
+    for (let batch = 0; batch < batchCount; ++batch) for (const k of frequencies(n)) {
+      const i = 2 * (batch * n + k);
+      max = Math.max(max, compare([inverseReal[i] + inverseReal[i + 1]], [directHermitian(half, n, batch, k)], paired, n, `c2r n=${n}`));
+    }
+    ++tests; line(`PASS c2r n=${n} paired=${paired} error=${max.toExponential(3)}`);
+  }
+  const nativeCases = await (await fetch('extended-cases.json')).json();
+  for (const program of nativeCases) {
+    const n = program.length, paired = Boolean(program.paired), inverse = Boolean(program.inverse);
+    const transform = ['c2c', 'r2c', 'c2r'][program.transform], bins = Math.floor(n / 2) + 1;
+    const batchCount = 2;
+    const input = samples(transform === 'c2r' ? bins : n, batchCount, transform === 'r2c' ? 2 : 4, paired);
+    if (transform === 'c2r') for (let batch = 0; batch < batchCount; ++batch)
+      for (const k of n % 2 === 0 ? [0, n / 2] : [0]) {const i = 4 * (batch * bins + k); input[i + 1] = 0; input[i + 3] = 0;}
+    const actual = await execute(n, paired, transform, inverse, input, batchCount, program);
+    let max = 0;
+    for (let batch = 0; batch < batchCount; ++batch) for (const k of frequencies(transform === 'r2c' ? bins : n)) {
+      let expected, value;
+      if (transform === 'c2r') {
+        const i = 2 * (batch * n + k); value = [actual[i] + actual[i + 1]];
+        expected = [directHermitian(input, n, batch, k)];
+      } else {
+        const i = 4 * (batch * (transform === 'r2c' ? bins : n) + k);
+        value = [actual[i] + actual[i + 2], actual[i + 1] + actual[i + 3]];
+        expected = transform === 'r2c' ? directReal(input, n, batch, k) : directComplex(input, n, batch, k, inverse);
+      }
+      max = Math.max(max, compare(value, expected, paired, n, `C++ ${transform} n=${n}`));
+    }
+    ++tests; line(`PASS C++ ${transform} n=${n} paired=${paired} inverse=${inverse} error=${max.toExponential(3)}`);
+  }
+  // Exercise the advertised upper bound without an O(N^2) CPU reference.
+  // An impulse has an exactly constant spectrum; its roundtrip checks every
+  // output sample, for power-of-two and largest-convolution planner paths.
+  for (const n of [1048575, 1048576]) for (const paired of [false, true]) {
+    const input = new Float32Array(4 * n); input[0] = 1;
+    const spectrum = await execute(n, paired, 'c2c', false, input, 1);
+    for (const k of frequencies(n)) {
+      const i = 4 * k;
+      compare([spectrum[i] + spectrum[i + 2], spectrum[i + 1] + spectrum[i + 3]], [1, 0], paired, n, `upper-limit forward n=${n}`);
+    }
+    const restored = await execute(n, paired, 'c2c', true, spectrum, 1);
+    let error = 0;
+    for (let j = 0; j < n; ++j)
+      error = Math.max(error, Math.abs(restored[4*j] + restored[4*j+2] - Number(j === 0)), Math.abs(restored[4*j+1] + restored[4*j+3]));
+    if (!Number.isFinite(error) || error > (paired ? 3e-11 : 3e-4)) throw Error(`upper-limit roundtrip n=${n}: ${error}`);
+    ++tests; line(`PASS upper-limit n=${n} paired=${paired} roundtrip=${error.toExponential(3)}`);
+  }
+  // Cross the one-dimensional WebGPU dispatch limit. Distinct impulses in
+  // the last batches expose a wrong workgroup-row stride or missing second row.
+  {
+    const n = 65536, batches = 65, input = new Float32Array(4 * n * batches);
+    for (let batch = 0; batch < batches; ++batch)
+      input[4 * (batch * n + (batch * 97) % n)] = .5 + batch / 128;
+    const output = await execute(n, false, 'c2c', false, input, batches);
+    let max = 0;
+    for (const batch of [0, 63, 64]) for (const k of frequencies(n)) {
+      const j = (batch * 97) % n, phase = -2 * Math.PI * ((j * k) % n) / n, amplitude = .5 + batch / 128;
+      const i = 4 * (batch * n + k);
+      max = Math.max(max, compare([output[i] + output[i + 2], output[i + 1] + output[i + 3]],
+        [amplitude * Math.cos(phase), amplitude * Math.sin(phase)], false, n, '2-D dispatch grid'));
+    }
+    ++tests; line(`PASS 2-D dispatch grid n=${n} batches=${batches} error=${max.toExponential(3)}`);
+  }
+  document.body.dataset.status = 'pass'; line(`All ${tests} extended transform cases PASS`);
+} catch (error) {
+  document.body.dataset.status = 'fail'; line(error.stack || String(error));
+}
+</script>

@@ -1,5 +1,39 @@
 # Qualification record
 
+## 0.2 real-packed and arbitrary-length extension
+
+Tested on the same Windows Chrome / RTX 3060 Ti session described below.
+Both public language APIs preserve the existing small C2C path and add real
+packing plus device-resident multipass radix-2/Bluestein transforms. All 197
+extended browser cases passed.
+
+- Expanded JS tests cover real/complex transforms and both precisions through
+  lengths 65,536 and 65,537, with independent reduced-phase CPU DFT checks,
+  all-point round trips, two batches, aligned offsets, output guards, and
+  repeated binding encodes. Separate C++-emitted programs test through 4093.
+- Maximum-length power-of-two (1,048,576) and adjacent non-power-of-two
+  (1,048,575) support was additionally checked with GPU round trips in both
+  precisions. The paired Bluestein round-trip error was `1.718e-15`.
+  The paired component-error gate is `3e-11` across the extended suite; scalar
+  gate `3e-4`. These gates are test thresholds, not worst-case error proofs.
+- Selected paired scaled errors: N=65,537 C2C forward `2.452e-13`, R2C
+  `8.678e-13`; N=65,536 C2C forward `8.528e-14`, R2C `8.055e-13`.
+  C++-generated N=4093 R2C error was `5.781e-13`.
+- A 65,536-point, 65-batch f32 transform exercised two-dimensional dispatch
+  beyond 65,535 workgroups; scaled error `8.534e-8`.
+- Eight actual **Emdawnwebgpu C++ runtime** cases exercise `Plan::bind` and
+  `Binding::encode`, not just emitted shaders: N=257/1024, real and complex,
+  f32 and paired-f32, two batches and aligned input/output offsets. Forward
+  transforms are compared with CPU DFT bins and GPU forward/inverse round trips
+  compare every sample. Largest paired scaled error `1.716e-13`; scalar
+  `2.856e-6`. JavaScript is only used for the browser shell/status bridge.
+
+The immutable Bluestein convolution kernel is prepared with a host double
+FFT during setup. All transforms of caller data, packing, spectral products,
+and normalization execute on GPU, without per-execution uploads/readbacks.
+
+## 0.1 small-transform baseline
+
 2026-09-06, Windows Chrome 152, RTX 3060 Ti, Dawn D3D12/DXC. This is one
 adapter/backend qualification, not a guarantee for all WebGPU implementations.
 
