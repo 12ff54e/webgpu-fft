@@ -4,6 +4,15 @@ for (const length of [0, 1, 257, 4.5, NaN])
   assert.throws(() => shader({length}), RangeError);
 assert.throws(() => shader({length: 36, precision: 'double'}), TypeError);
 assert.throws(() => shader({length: 36, inverse: 1}), TypeError);
+assert.throws(() => shader({length: 36, optimized: 1}), TypeError);
+assert.throws(() => program({length: 1024, optimized: 1}), TypeError);
+const generic=shader({length:36,precision:'paired-f32',optimized:false});
+const optimized=shader({length:36,precision:'paired-f32'});
+assert.match(generic,/for\(var p=0u/);
+assert.doesNotMatch(generic,/radix_three/);
+assert.match(optimized,/radix_three/);
+assert.equal(program({length:36,precision:'paired-f32',optimized:false}).small_code,generic);
+assert.equal((generic.match(/workgroupBarrier\(\)/g)||[]).length-(optimized.match(/workgroupBarrier\(\)/g)||[]).length,2);
 assert.throws(() => shader({length: 36, transform: 'r2c'}), TypeError);
 for (const length of [0, 1, 1048577, 2.5, NaN])
   assert.throws(() => program({length}), RangeError);

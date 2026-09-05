@@ -20,6 +20,13 @@ and prime lengths. It does not yet tune algorithms to individual adapters.
   with `M = nextPowerOfTwo(2*N-1)`. Large prime transforms are O(M log M),
   not direct quadratic DFTs. Bluestein pads internally without changing the
   requested transform grid or normalization.
+- Small transforms use specialized radix-2/radix-3 butterflies, exact trivial
+  twiddles, and a fused final reorder/store by default. Select `optimized: false`
+  in JS plan/shader options or `.optimized = false` in C++ `Options` for the
+  unchanged generic reference. The low-level C++ form is
+  `shader(length, paired, inverse, false)`. This switch affects N≤256 only;
+  large-transform algorithms are unchanged. Optimized arithmetic changes the
+  reduction order, so it is not bit-identical to the generic reference.
 - Contiguous batches, out of place. Transform kinds: `c2c`, `r2c`, `c2r`.
   No arbitrary strides.
 - One complex sample is four `f32`s: `[real_hi, imag_hi, real_lo, imag_lo]`.
@@ -185,8 +192,9 @@ python3 -m http.server 8080 --directory build
 
 Open `http://localhost:8080/` in a WebGPU-enabled browser. The suite tests both
 C++-generated and JS-generated shaders against an independent CPU double DFT:
-17 lengths, both precisions, both directions, four batches, nonzero low parts,
-and nonzero aligned offsets (136 cases). Scaled component-error gates are
+31 lengths, both precisions, both directions, both kernel variants, four batches,
+nonzero low parts, and nonzero aligned offsets (496 cases). It also directly
+compares optimized and generic outputs for the same inputs. Scaled component-error gates are
 `1e-4` for f32 and `3e-11` for paired-f32; these are test bounds, not universal
 error guarantees. CPU DFT error also contributes to the measured difference.
 `npm test` checks generated sources and host-side API rejection paths.

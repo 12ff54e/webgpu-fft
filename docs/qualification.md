@@ -1,5 +1,34 @@
 # Qualification record
 
+## Specialized small FFT kernels
+
+The generic generator remains selectable with `optimized=false`. Its original
+twiddle generation (including tiny trigonometric values at integer multiples
+of π), reduction order, and rounding barriers are retained. The optimized path
+specializes radix 2 and 3, uses exact identity/sign/quarter-turn twiddles, and
+writes the last stage directly in natural order, removing two workgroup
+barriers. Paired operations retain their strict f32 rounding barriers.
+
+The first 136 GPU comparisons on the original test dimensions passed for the
+optimized C++ and JS generators. N=36 paired scaled errors: forward `7.280e-14`,
+inverse `2.492e-15`. Different arithmetic ordering is expected to change low
+bits; no bit-identical iterative-solver trajectory is promised.
+
+Initial same-input timing: N=36, batch=4096, 30 repetitions/sample, seven
+samples, foreground Chrome on the RTX 3060 Ti. Queue-completion wall time,
+excluding setup/upload/readback:
+
+| Kernel | Precision | Median ms/pass | Range ms/pass |
+| --- | --- | ---: | ---: |
+| Optimized FFT | f32 | 0.333 | 0.300–0.352 |
+| Generic FFT | f32 | 0.336 | 0.328–0.369 |
+| Optimized FFT | paired-f32 | 0.313 | 0.289–0.382 |
+| Generic FFT | paired-f32 | 0.562 | 0.500–0.600 |
+
+The paired FFT improved by about 1.80× in this comparison; scalar timings were
+essentially unchanged. These same-session measurements are not comparable
+with older runs under different browser/queue scheduling conditions.
+
 ## 0.2 real-packed and arbitrary-length extension
 
 Tested on the same Windows Chrome / RTX 3060 Ti session described below.

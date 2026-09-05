@@ -14,6 +14,7 @@ struct Options {
     bool paired = false;
     bool inverse = false;
     Transform transform = Transform::C2C;
+    bool optimized = true;
 };
 struct Stage {
     std::string entry_point;
@@ -29,6 +30,7 @@ struct Program {
     bool inverse = false;
     bool small = false;
     bool bluestein = false;
+    bool optimized = true;
     std::vector<float> table;
     std::string code;
     std::string small_code;
@@ -57,6 +59,7 @@ inline Program program(Options options) {
     result.length = n;
     result.transform = options.transform;
     result.paired = options.paired;
+    result.optimized = options.optimized;
     result.inverse = options.transform == Transform::C2C
                          ? options.inverse
                          : options.transform == Transform::C2R;
@@ -69,7 +72,8 @@ inline Program program(Options options) {
     }
     result.fft_length = m;
     if (result.small)
-        result.small_code = shader(n, options.paired, result.inverse);
+        result.small_code =
+            shader(n, options.paired, result.inverse, options.optimized);
     if (result.small && options.transform == Transform::C2C) {
         result.stages.push_back({"main", 0, 0});
         return result;

@@ -2,17 +2,18 @@ import {arithmetic, paired, scalar, large} from './source.js';
 import {shader} from './shader.js';
 
 /** Pure-host program generation; never accesses a GPU or browser global. */
-export function program({length: n, precision = 'f32', inverse = false, transform = 'c2c'}) {
+export function program({length: n, precision = 'f32', inverse = false, transform = 'c2c', optimized = true}) {
   if (!Number.isInteger(n) || n < 2 || n > 1048576)
     throw new RangeError('FFT plan length must be an integer in [2,1048576]');
   if (!['f32','paired-f32'].includes(precision)) throw new TypeError('FFT precision must be f32 or paired-f32');
   if (!['c2c','r2c','c2r'].includes(transform)) throw new TypeError('FFT transform must be c2c, r2c, or c2r');
   if (typeof inverse !== 'boolean') throw new TypeError('FFT inverse must be boolean');
+  if (typeof optimized !== 'boolean') throw new TypeError('FFT optimized must be boolean');
   inverse = transform === 'c2c' ? inverse : transform === 'c2r';
   const small = n <= 256, bluestein = !small && (n & (n - 1)) !== 0;
   let m = n;if (bluestein) {m = 1; while (m < 2*n - 1) m *= 2;}
-  const result = {length:n,fft_length:m,transform,paired:precision==='paired-f32',inverse,small,bluestein,
-    table:new Float32Array(0),code:'',small_code:small?shader({length:n,precision,inverse}):'',stages:[],
+  const result = {length:n,fft_length:m,transform,paired:precision==='paired-f32',inverse,small,bluestein,optimized,
+    table:new Float32Array(0),code:'',small_code:small?shader({length:n,precision,inverse,optimized}):'',stages:[],
     input_bytes:transform==='r2c'?8*n:16*(transform==='c2r'?Math.floor(n/2)+1:n),
     output_bytes:transform==='c2r'?8*n:16*(transform==='r2c'?Math.floor(n/2)+1:n)};
   if(small && transform==='c2c'){result.stages.push({entry_point:'main',span:0,flags:0});return result;}

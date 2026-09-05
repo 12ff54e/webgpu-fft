@@ -17,7 +17,10 @@ namespace webgpu_fft {
 // complex values are vec4(real_hi, imag_hi, real_lo, imag_lo). Forward uses
 // exp(-i*2*pi*k*j/N); inverse uses the positive sign and normalizes by N.
 // No padding: mixed-radix stages preserve the caller's exact sample grid.
-inline std::string shader(int length, bool paired, bool inverse = false) {
+inline std::string shader(int length,
+                          bool paired,
+                          bool inverse = false,
+                          bool optimized = true) {
     if (length < 2 || length > 256)
         throw std::invalid_argument("WebGPU FFT length must be in [2,256]");
     std::vector<int> radices;
@@ -50,6 +53,15 @@ inline std::string shader(int length, bool paired, bool inverse = false) {
     }
     out << ");\n";
     out << (paired ? detail::paired : detail::scalar);
+    if (optimized) {
+        const double root = std::sqrt(3.0) / 2;
+        const float hi = static_cast<float>(root);
+        out << "const PAIRED = " << (paired ? "true" : "false") << ";\n"
+            << "const INVERSE = " << (inverse ? "true" : "false") << ";\n"
+            << "const SQRT_THREE_OVER_TWO = vec2f(" << hi << "f,"
+            << static_cast<float>(root - hi) << "f);\n"
+            << detail::optimized;
+    }
     out << "@compute @workgroup_size(" << length << ")\n"
         << "fn main(@builtin(local_invocation_index) lane:u32,"
         << "@builtin(workgroup_id) group:vec3u){\n"
@@ -58,6 +70,49 @@ inline std::string shader(int length, bool paired, bool inverse = false) {
     int span = length;
     for (int radix : radices) {
         const int step = span / radix;
+        if (optimized) {
+            out << "{let block=lane/" << span << "u;let j=lane%" << step
+                << "u;let q=(lane%" << span << "u)/" << step << "u;\n"
+                << "let start=block*" << span << "u+j;\n";
+            if (radix == 2) {
+                out << "let sum=cadd(values[start],select(values[start+" << step
+                    << "u],-values[start+" << step << "u],q!=0u),lane);\n";
+            } else if (radix == 3) {
+                out << "let sum=radix_three(values[start],values[start+" << step
+                    << "u],values[start+" << 2 * step << "u],q,lane);\n";
+            } else {
+                out << "var sum=values[start];for(var p=1u;p<" << radix
+                    << "u;p++){sum=cadd(sum,twiddle(values[start+p*" << step
+                    << "u],(p*q*" << length / radix << "u)%N,lane),lane);}\n";
+            }
+            out << "let value=twiddle(sum,(q*j*" << length / span
+                << "u)%N,lane);\n";
+            if (step == 1) {
+                // The final stage writes natural-order output directly, so it
+                // needs neither an in-place read fence nor a following barrier.
+                out << "var index=0u;var k=lane;\n";
+                int digit_span = length, weight = 1;
+                for (int digit_radix : radices) {
+                    digit_span /= digit_radix;
+                    out << "index+=(k/" << digit_span << "u)*" << weight
+                        << "u;k%=" << digit_span << "u;\n";
+                    weight *= digit_radix;
+                }
+                if (inverse) {
+                    const double norm = 1.0 / length;
+                    const float hi = static_cast<float>(norm);
+                    out << "output[base+index]=cscale(value,vec2f(" << hi
+                        << "f," << static_cast<float>(norm - hi)
+                        << "f),lane);}\n";
+                } else
+                    out << "output[base+index]=value;}\n";
+            } else {
+                out << "workgroupBarrier();values[lane]=value;workgroupBarrier("
+                       ");}\n";
+            }
+            span = step;
+            continue;
+        }
         out << "{let block=lane/" << span << "u;let j=lane%" << step
             << "u;let q=(lane%" << span << "u)/" << step << "u;\n"
             << "var sum=vec4f(0.0);for(var p=0u;p<" << radix << "u;p++){\n"
@@ -68,6 +123,10 @@ inline std::string shader(int length, bool paired, bool inverse = false) {
             << "u)%N],lane);workgroupBarrier();values[lane]=value;"
             << "workgroupBarrier();}\n";
         span = step;
+    }
+    if (optimized) {
+        out << "}\n";
+        return out.str();
     }
     out << "var k=lane;var index=0u;\n";
     span = length;

@@ -26,6 +26,7 @@ void write_program(std::ostream& output, const webgpu_fft::Program& program) {
            << ",\"paired\":" << program.paired
            << ",\"inverse\":" << program.inverse
            << ",\"small\":" << program.small
+           << ",\"optimized\":" << program.optimized
            << ",\"bluestein\":" << program.bluestein << ",\"code\":";
     write_string(output, program.code);
     output << ",\"small_code\":";
@@ -81,22 +82,28 @@ int main(int argc, char** argv) {
         return output ? 0 : 1;
     }
     for (int n :
-         {2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 16, 17, 30, 36, 64, 128, 256}) {
+         {2,  3,  4,  5,  6,  7,  8,  9,   11,  12,  16,  17,  18,  24,  27, 30,
+          36, 48, 54, 64, 72, 81, 96, 108, 128, 144, 162, 192, 216, 243, 256}) {
         for (bool paired : {false, true}) {
             for (bool inverse : {false, true}) {
-                if (!first) output << ',';
-                first = false;
-                output << "{\"n\":" << n << ",\"paired\":" << paired
-                       << ",\"inverse\":" << inverse << ",\"shader\":\"";
-                for (char c : webgpu_fft::shader(n, paired, inverse)) {
-                    if (c == '\n')
-                        output << "\\n";
-                    else if (c == '"' || c == '\\')
-                        output << '\\' << c;
-                    else
-                        output << c;
+                for (bool optimized : {false, true}) {
+                    if (!first) output << ',';
+                    first = false;
+                    output << "{\"n\":" << n << ",\"paired\":" << paired
+                           << ",\"inverse\":" << inverse
+                           << ",\"optimized\":" << optimized
+                           << ",\"shader\":\"";
+                    for (char c :
+                         webgpu_fft::shader(n, paired, inverse, optimized)) {
+                        if (c == '\n')
+                            output << "\\n";
+                        else if (c == '"' || c == '\\')
+                            output << '\\' << c;
+                        else
+                            output << c;
+                    }
+                    output << "\"}";
                 }
-                output << "\"}";
             }
         }
     }

@@ -23,13 +23,25 @@ int main() {
     const auto localized = webgpu_fft::shader(36, true);
     std::locale::global(original);
     if (localized != reference) return 2;
+    const auto generic = webgpu_fft::shader(36, true, false, false);
+    if (generic.find("radix_three") != std::string::npos ||
+        generic.find("for(var p=0u") == std::string::npos ||
+        reference.find("radix_three") == std::string::npos)
+        return 9;
+    if (webgpu_fft::program(
+            {36, true, false, webgpu_fft::Transform::C2C, false})
+            .small_code != generic)
+        return 10;
     for (int length = 2; length <= 256; ++length) {
         for (bool paired : {false, true}) {
             for (bool inverse : {false, true}) {
-                const auto code = webgpu_fft::shader(length, paired, inverse);
-                if (code.find("@workgroup_size(" + std::to_string(length) +
-                              ")") == std::string::npos)
-                    return 3;
+                for (bool optimized : {false, true}) {
+                    const auto code =
+                        webgpu_fft::shader(length, paired, inverse, optimized);
+                    if (code.find("@workgroup_size(" + std::to_string(length) +
+                                  ")") == std::string::npos)
+                        return 3;
+                }
             }
         }
     }

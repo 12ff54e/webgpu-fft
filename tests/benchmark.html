@@ -15,17 +15,17 @@ document.querySelector('#start').onclick = async () => {
     const size=n*batch*16,a=device.createBuffer({size,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST}),b=device.createBuffer({size,usage:GPUBufferUsage.STORAGE});
     const input=new Float32Array(size/4);for(let j=0;j<input.length;j+=4){input[j]=Math.sin(j*.3);input[j+1]=Math.cos(j*.2);input[j+2]=1e-8;}
     device.queue.writeBuffer(a,0,input);
-    for(const precision of ['f32','paired-f32']) for(const algorithm of (n<=256?['FFT','DFT']:['FFT'])) {
+    for(const precision of ['f32','paired-f32']) for(const algorithm of (n<=256?['FFT optimized','FFT generic','DFT']:['FFT'])) {
       device.pushErrorScope('validation');
       let plan,binding;
       if(algorithm==='DFT') {
-        const prefix=shader({length:n,precision}).split('@compute')[0];
+        const prefix=shader({length:n,precision,optimized:false}).split('@compute')[0];
         const code=prefix+`@compute @workgroup_size(${n}) fn main(@builtin(local_invocation_index) lane:u32,@builtin(workgroup_id) group:vec3u){let base=group.x*N;values[lane]=input[base+lane];workgroupBarrier();var sum=vec4f(0.0);for(var j=0u;j<N;j++){sum=cadd(sum,cmul(values[j],roots[(j*lane)%N],lane),lane);}output[base+lane]=sum;}`;
         const pipeline=await device.createComputePipelineAsync({layout:'auto',compute:{module:device.createShaderModule({code}),entryPoint:'main'}});
         const group=device.createBindGroup({layout:pipeline.getBindGroupLayout(0),entries:[{binding:0,resource:{buffer:a}},{binding:1,resource:{buffer:b}}]});
         binding={encode(encoder){const pass=encoder.beginComputePass();pass.setPipeline(pipeline);pass.setBindGroup(0,group);pass.dispatchWorkgroups(batch);pass.end();}};
       } else {
-        plan=await FFTPlan.create(device,{length:n,precision});
+        plan=await FFTPlan.create(device,{length:n,precision,optimized:algorithm!=='FFT generic'});
         binding=plan.bind(a,b,{batchCount:batch});
       }
       const run=async count=>{const encoder=device.createCommandEncoder();for(let j=0;j<count;j++)binding.encode(encoder);device.queue.submit([encoder.finish()]);await device.queue.onSubmittedWorkDone();};

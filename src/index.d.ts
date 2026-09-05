@@ -4,6 +4,7 @@ export interface FFTOptions {
   precision?: 'f32' | 'paired-f32';
   inverse?: boolean;
   transform?: 'c2c' | 'r2c' | 'c2r';
+  optimized?: boolean;
 }
 export interface FFTBindingOptions {
   batchCount?: number;
@@ -19,6 +20,7 @@ export interface FFTStage {entry_point: string; span: number; flags: number;}
 export interface FFTProgram {
   length: number; fft_length: number; transform: 'c2c' | 'r2c' | 'c2r';
   paired: boolean; inverse: boolean; small: boolean; bluestein: boolean;
+  optimized: boolean;
   table: Float32Array; code: string; small_code: string; stages: FFTStage[];
   input_bytes: number; output_bytes: number;
 }
