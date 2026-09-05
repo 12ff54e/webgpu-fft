@@ -9,8 +9,13 @@ specializes radix 2 and 3, uses exact identity/sign/quarter-turn twiddles, and
 writes the last stage directly in natural order, removing two workgroup
 barriers. Paired operations retain their strict f32 rounding barriers.
 
-The first 136 GPU comparisons on the original test dimensions passed for the
-optimized C++ and JS generators. N=36 paired scaled errors: forward `7.280e-14`,
+All 496 small GPU/CPU comparisons and 248 direct same-input comparisons between
+generic and specialized variants passed. Both emitters, precisions, directions,
+and 31 lengths are covered, including powers of three through 243 and mixed
+radix combinations. The 197 real/large/upper-limit regressions also passed.
+The actual Emdawnwebgpu C++ runtime test was expanded from eight to 12 cases
+with N=36 real/C2C in both precisions; all passed. N=36 paired scaled errors in
+the small suite: forward `7.280e-14`,
 inverse `2.492e-15`. Different arithmetic ordering is expected to change low
 bits; no bit-identical iterative-solver trajectory is promised.
 
@@ -28,6 +33,26 @@ excluding setup/upload/readback:
 The paired FFT improved by about 1.80× in this comparison; scalar timings were
 essentially unchanged. These same-session measurements are not comparable
 with older runs under different browser/queue scheduling conditions.
+
+The larger solver-shaped workload exposed a scalar regression hidden by the
+smaller benchmark. N=36, batch=31,680 (`20*99*16`), 20 repetitions/sample,
+seven samples, same timing convention:
+
+| Kernel candidate | Precision | Median ms/pass | Range ms/pass |
+| --- | --- | ---: | ---: |
+| Specialized FFT | paired-f32 | 1.851 | 1.799–1.875 |
+| Generic FFT | paired-f32 | 3.736 | 3.692–3.798 |
+| Direct DFT | paired-f32 | 10.152 | 10.103–10.246 |
+| Specialized FFT (rejected) | f32 | 2.251 | 2.199–2.348 |
+| Generic FFT | f32 | 0.299 | 0.248–0.302 |
+
+The paired specialization improved throughput by about 2.02× at the solver's
+batch size. The scalar specialization from commit `aa75fd7` was rejected:
+current f32 generation returns the **exact generic shader** regardless of the
+optimization flag. Native and JS source-equality tests check that policy for
+every length 2–256 and both directions. Existing generic GPU cases therefore
+cover the retained scalar implementation. This is a precision-specific choice,
+not a claim that the specialized arithmetic is universally faster.
 
 ## 0.2 real-packed and arbitrary-length extension
 

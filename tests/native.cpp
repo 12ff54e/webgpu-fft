@@ -38,6 +38,9 @@ int main() {
                 for (bool optimized : {false, true}) {
                     const auto code =
                         webgpu_fft::shader(length, paired, inverse, optimized);
+                    if (!paired && code != webgpu_fft::shader(length, false,
+                                                              inverse, false))
+                        return 11;
                     if (code.find("@workgroup_size(" + std::to_string(length) +
                                   ")") == std::string::npos)
                         return 3;

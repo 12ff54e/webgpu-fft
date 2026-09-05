@@ -15,7 +15,7 @@ document.querySelector('#start').onclick = async () => {
     const size=n*batch*16,a=device.createBuffer({size,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST}),b=device.createBuffer({size,usage:GPUBufferUsage.STORAGE});
     const input=new Float32Array(size/4);for(let j=0;j<input.length;j+=4){input[j]=Math.sin(j*.3);input[j+1]=Math.cos(j*.2);input[j+2]=1e-8;}
     device.queue.writeBuffer(a,0,input);
-    for(const precision of ['f32','paired-f32']) for(const algorithm of (n<=256?['FFT optimized','FFT generic','DFT']:['FFT'])) {
+    for(const precision of ['f32','paired-f32']) for(const algorithm of (n<=256?['FFT default','FFT generic','DFT']:['FFT'])) {
       device.pushErrorScope('validation');
       let plan,binding;
       if(algorithm==='DFT') {

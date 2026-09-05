@@ -20,12 +20,14 @@ and prime lengths. It does not yet tune algorithms to individual adapters.
   with `M = nextPowerOfTwo(2*N-1)`. Large prime transforms are O(M log M),
   not direct quadratic DFTs. Bluestein pads internally without changing the
   requested transform grid or normalization.
-- Small transforms use specialized radix-2/radix-3 butterflies, exact trivial
+- Paired-f32 small transforms use specialized radix-2/radix-3 butterflies, exact trivial
   twiddles, and a fused final reorder/store by default. Select `optimized: false`
   in JS plan/shader options or `.optimized = false` in C++ `Options` for the
   unchanged generic reference. The low-level C++ form is
   `shader(length, paired, inverse, false)`. This switch affects N≤256 only;
-  large-transform algorithms are unchanged. Optimized arithmetic changes the
+  large-transform algorithms are unchanged. Scalar f32 retains the exact generic
+  kernel even when optimization is enabled: specialization regressed larger
+  scalar batches on the qualified adapter. Optimized paired arithmetic changes the
   reduction order, so it is not bit-identical to the generic reference.
 - Contiguous batches, out of place. Transform kinds: `c2c`, `r2c`, `c2r`.
   No arbitrary strides.

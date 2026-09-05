@@ -8,7 +8,8 @@ function options({length, precision = 'f32', inverse = false, transform = 'c2c',
   if (typeof inverse !== 'boolean') throw new TypeError('FFT inverse must be boolean');
   if (typeof optimized !== 'boolean') throw new TypeError('FFT optimized must be boolean');
   if (transform !== 'c2c') throw new TypeError('Single-shader API supports c2c only; use FFTPlan for real transforms');
-  return {length, precision, inverse, optimized};
+  // Scalar specialization regressed large batches; keep its exact reference.
+  return {length, precision, inverse, optimized: optimized && precision === 'paired-f32'};
 }
 
 /** Emit WGSL independently of the browser; no WebGPU globals are accessed. */

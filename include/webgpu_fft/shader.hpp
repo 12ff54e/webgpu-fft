@@ -21,6 +21,9 @@ inline std::string shader(int length,
                           bool paired,
                           bool inverse = false,
                           bool optimized = true) {
+    // The scalar compiler already optimizes the generic loop well. The
+    // specialized branch regressed large batches; retain the exact reference.
+    optimized = optimized && paired;
     if (length < 2 || length > 256)
         throw std::invalid_argument("WebGPU FFT length must be in [2,256]");
     std::vector<int> radices;

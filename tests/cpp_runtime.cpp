@@ -66,11 +66,11 @@ class RuntimeTest : public std::enable_shared_from_this<RuntimeTest> {
     }
     void run() {
         if (failed_) return;
-        if (test_ == 8) {
-            fft_report(1, "8 Emdawnwebgpu C++ Plan runtime cases PASS");
+        if (test_ == 12) {
+            fft_report(1, "12 Emdawnwebgpu C++ Plan runtime cases PASS");
             return;
         }
-        const int n = test_ < 4 ? 257 : 1024;
+        const int n = test_ < 4 ? 36 : test_ < 8 ? 257 : 1024;
         const bool paired = (test_ % 4) >= 2, real = test_ % 2 != 0;
         constexpr int BATCHES = 2;
         constexpr std::uint64_t OFFSET = 256;
