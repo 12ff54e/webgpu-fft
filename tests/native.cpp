@@ -80,5 +80,11 @@ int main() {
                 return 8;
         }
     }
+    const auto fused = webgpu_fft::program({4096});
+    const auto unfused = webgpu_fft::program(
+        {4096, false, false, webgpu_fft::Transform::C2C, false});
+    if (fused.stages.size() != 9 || unfused.stages.size() != 14 ||
+        fused.stages[1].entry_point != "block_butterfly" ||
+        fused.stages[2].entry_point != "butterfly_pair") return 12;
     std::cout << "Native generator validation PASS\n";
 }

@@ -141,8 +141,10 @@ inline Program program(Options options) {
                              : result.bluestein ? 6u
                                                 : 2u});
     auto stages = [&](bool inverse) {
-        for (int span = 2; span <= m; span *= 2)
-            result.stages.push_back({"butterfly",
+        if (options.optimized)
+            result.stages.push_back({"block_butterfly", 64, inverse ? 1u : 0u});
+        for (int span = options.optimized ? 128 : 2; span <= m; span *= 2)
+            result.stages.push_back({options.optimized ? "butterfly_pair" : "butterfly",
                                      static_cast<std::uint32_t>(span),
                                      inverse ? 1u : 0u});
     };

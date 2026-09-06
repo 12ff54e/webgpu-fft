@@ -1,0 +1,70 @@
+<!doctype html><meta charset="utf-8"><title>Standalone FFT GPU profile</title>
+<p>Standalone FFT only. Alternating optimized/reference measurements; inputs stay on GPU.
+GPU timestamps include dispatch gaps, wall time includes encoding/submission/wait.
+Keep this page visible and do not run other GPU work concurrently.</p>
+<button id="start">Run profile</button><pre id="log"></pre>
+<script type="module">
+import {FFTPlan} from './src/index.js';
+const log=document.querySelector('#log'),button=document.querySelector('#start');
+button.onclick=async()=>{
+  button.disabled=true;window.fftBenchmarkResults=[];
+  try{
+    const q=new URLSearchParams(location.search);
+    const lengths=(q.get('lengths')||'36,256,1024,1009,4096,65536').split(',').map(Number);
+    const precisions=q.has('precision')?[q.get('precision')]:['f32','paired-f32'];
+    const transform=q.get('transform')||'c2c',repeats=Number(q.get('repeats')||10);
+    const ReferencePlan=q.has('reference')?(await import(q.get('reference'))).FFTPlan:FFTPlan;
+    if(!Number.isInteger(repeats)||repeats<1||repeats>100)throw Error('Invalid repeats');
+    const adapter=await navigator.gpu.requestAdapter({powerPreference:'high-performance'});
+    const timestamp=adapter.features.has('timestamp-query');
+    const device=await adapter.requestDevice({requiredFeatures:timestamp?['timestamp-query']:[]});
+    let fatal;device.addEventListener('uncapturederror',event=>{fatal=event.error;});
+    const queries=timestamp&&device.createQuerySet({type:'timestamp',count:2});
+    const resolve=timestamp&&device.createBuffer({size:16,usage:GPUBufferUsage.QUERY_RESOLVE|GPUBufferUsage.COPY_SRC});
+    const read=timestamp&&device.createBuffer({size:16,usage:GPUBufferUsage.MAP_READ|GPUBufferUsage.COPY_DST});
+    log.textContent=`Adapter: ${adapter.info?.description||adapter.info?.device}; GPU timestamps: ${timestamp}\n`;
+    const stats=values=>{const a=[...values].sort((a,b)=>a-b);return {min:a[0],max:a.at(-1),median:(a[3]+a[4])/2,average:a.reduce((s,x)=>s+x,0)/a.length};};
+    for(const length of lengths)for(const precision of precisions){
+      const batchCount=Number(q.get('batch')||Math.max(1,Math.min(4096,Math.floor(262144/length))));
+      const variants=[];
+      for(const optimized of [false,true]){
+        const Plan=optimized?FFTPlan:ReferencePlan;
+        const plan=await Plan.create(device,{length,precision,transform,optimized:optimized||q.has('reference')});
+        const a=device.createBuffer({size:plan.description.input_bytes*batchCount,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});
+        const b=device.createBuffer({size:plan.description.output_bytes*batchCount,usage:GPUBufferUsage.STORAGE});
+        const input=new Float32Array(a.size/4);
+        for(let j=0;j<input.length;j++)input[j]=Math.sin(j*.371)*(j%4>1?1e-8:1);
+        device.queue.writeBuffer(a,0,input);
+        variants.push({optimized,plan,a,b,binding:plan.bind(a,b,{batchCount}),wall:[],gpu:[],host:[]});
+      }
+      async function run(v,count,measure){
+        const start=performance.now(),encoder=device.createCommandEncoder();
+        const pass=encoder.beginComputePass(timestamp?{timestampWrites:{querySet:queries,beginningOfPassWriteIndex:0,endOfPassWriteIndex:1}}:{});
+        for(let i=0;i<count;i++)v.binding.dispatch(pass);
+        pass.end();
+        if(timestamp){encoder.resolveQuerySet(queries,0,2,resolve,0);encoder.copyBufferToBuffer(resolve,0,read,0,16);}
+        const commands=encoder.finish(),host=performance.now()-start;
+        device.queue.submit([commands]);
+        await device.queue.onSubmittedWorkDone();
+        const wall=(performance.now()-start)/count;
+        let gpu=null;
+        if(timestamp){await read.mapAsync(GPUMapMode.READ);const t=new BigUint64Array(read.getMappedRange());gpu=Number(t[1]-t[0])/1e6/count;read.unmap();}
+        if(fatal)throw fatal;
+        if(measure){v.wall.push(wall);v.host.push(host/count);if(gpu!==null)v.gpu.push(gpu);}
+      }
+      for(const v of variants)await run(v,3,false);
+      // Balanced A/B/B/A order across eight samples per variant.
+      for(let s=0;s<8;s++)for(const i of s%2?[1,0]:[0,1])await run(variants[i],repeats,true);
+      for(const v of variants){
+        const result={length,precision,transform,batchCount,repeats,optimized:v.optimized,reference:q.get('reference')||'generic',stages:v.plan.description.stages.length,
+          visible:document.visibilityState,wall:stats(v.wall),host:stats(v.host),gpu:timestamp?stats(v.gpu):null};
+        window.fftBenchmarkResults.push(result);log.textContent+=JSON.stringify(result)+'\n';
+        v.binding.destroy();v.plan.destroy();v.a.destroy();v.b.destroy();
+      }
+    }
+    queries?.destroy();resolve?.destroy();read?.destroy();device.destroy();
+    document.body.dataset.status='pass';
+  }catch(error){log.textContent+='\n'+(error.stack||error);document.body.dataset.status='fail';}
+  button.disabled=false;
+};
+</script>

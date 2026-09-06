@@ -1,5 +1,49 @@
 # Qualification record
 
+## Standalone large-transform optimization (2026-09-06)
+
+No cuMES solver execution is included in these measurements. Large optimized
+plans fuse the first six radix-2 stages into one 64-sample workgroup-memory
+stage. Subsequent butterflies compute their complex product once and write
+both outputs. The original radix-2 arithmetic, twiddle tables and ordering are
+preserved; `optimized=false` retains the unfused reference. Bluestein benefits
+in both its forward and inverse convolution transforms. Input packing, real
+packing and normalization are unchanged; neither execution API gains hidden
+allocations, uploads, submissions or host fences.
+
+Windows Chrome 152 / RTX 3060 Ti / Dawn D3D12: eight alternating samples per
+variant, 30 device-resident transforms per sample, 262144/N batches (rounded
+down, capped at 4096), visible tab. GPU timestamps, median milliseconds per
+batched FFT (dispatch gaps included; setup and transfer excluded):
+
+| N | Precision | Generic GPU ms | Optimized GPU ms | Speedup |
+| ---: | --- | ---: | ---: | ---: |
+| 1024 | f32 | 0.4003 | 0.2529 | 1.58× |
+| 1024 | paired-f32 | 0.7139 | 0.4110 | 1.74× |
+| 1009 | f32 | 1.1139 | 0.6892 | 1.62× |
+| 1009 | paired-f32 | 2.4395 | 1.6154 | 1.51× |
+| 4096 | f32 | 0.3326 | 0.2315 | 1.44× |
+| 4096 | paired-f32 | 0.6683 | 0.4447 | 1.50× |
+| 65536 | f32 | 0.4508 | 0.3329 | 1.35× |
+| 65536 | paired-f32 | 0.8984 | 0.5907 | 1.52× |
+
+These are adapter-specific measurements, not universal performance bounds.
+The small-length comparisons in the first exploratory profile measured the
+previously shipped specialization, not a new small-length speedup.
+
+All 197 extended GPU tests passed, including independent CPU DFT bins, real
+and complex all-point round trips, maximum lengths 1048575/1048576, output
+guards, and a two-dimensional dispatch. Added comparisons require exact
+output words against the generic large kernel at six lengths through 4096,
+both precisions and both directions (24 comparisons); all passed. All 12
+actual Emdawnwebgpu C++ Plan runtime tests passed. Native CTest, generated
+source checks, JS API validation and TypeScript checks also passed.
+
+Evidence in the cuMES workspace: `../tmp/fft-independent-pair-profile.json`,
+`fft-independent-pair-extended.json`, `fft-independent-cpp.json`. Reproduce
+with `profile.html?lengths=1024,1009,4096,65536&repeats=30`, `extended.html`,
+and `cpp_runtime.html` from a standalone build.
+
 ## Specialized small FFT kernels
 
 The generic generator remains selectable with `optimized=false`. Its original

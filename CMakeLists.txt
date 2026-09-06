@@ -20,6 +20,7 @@ if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/tests/index.html ${CMAKE_CURRENT_BINARY_DIR}/index.html
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR}/src
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/tests/benchmark.html ${CMAKE_CURRENT_BINARY_DIR}/benchmark.html
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/tests/profile.html ${CMAKE_CURRENT_BINARY_DIR}/profile.html
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/tests/extended.html ${CMAKE_CURRENT_BINARY_DIR}/extended.html
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/tests/reference.mjs ${CMAKE_CURRENT_BINARY_DIR}/reference.mjs
     DEPENDS generate_fft_cases)

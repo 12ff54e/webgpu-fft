@@ -45,7 +45,10 @@ export function program({length: n, precision = 'f32', inverse = false, transfor
   }
   let scale=inverse&&!small?1/n:1;if(bluestein)scale/=m;append(scale,0);result.table=table;
   result.stages.push({entry_point:'pack',span:0,flags:small?0:bluestein?6:2});
-  const stages=inverse=>{for(let span=2;span<=m;span*=2)result.stages.push({entry_point:'butterfly',span,flags:inverse?1:0});};
+  const stages=inverse=>{
+    if(optimized)result.stages.push({entry_point:'block_butterfly',span:64,flags:inverse?1:0});
+    for(let span=optimized?128:2;span<=m;span*=2)result.stages.push({entry_point:optimized?'butterfly_pair':'butterfly',span,flags:inverse?1:0});
+  };
   if(small)result.stages.push({entry_point:'main',span:0,flags:0});else stages(inverse&&!bluestein);
   if(bluestein){result.stages.push({entry_point:'multiply',span:0,flags:0});stages(true);}
   result.stages.push({entry_point:'unpack',span:0,flags:bluestein?4:0});return result;

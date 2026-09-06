@@ -4,6 +4,7 @@ struct Params { n:u32, m:u32, batches:u32, span:u32, kind:u32, flags:u32, pad0:u
 @group(0) @binding(2) var<storage,read> table:array<vec4f>;
 @group(0) @binding(3) var<uniform> params:Params;
 var<workgroup> rounding:array<atomic<u32>,64>;
+var<workgroup> block_values:array<vec4f,64>;
 fn load_complex(i:u32)->vec4f {
     return vec4f(input[4u*i],input[4u*i+1u],input[4u*i+2u],input[4u*i+3u]);
 }
@@ -36,6 +37,37 @@ fn butterfly(@builtin(global_invocation_id) id:vec3u,@builtin(num_workgroups) gr
     var root=table[k*(params.m/params.span)];if((params.flags&1u)!=0u){root=conjugate(root);}
     let a=load_complex(base+k);var b=cmul(load_complex(base+k+half),root,lane);
     if(j%params.span>=half){b=-b;}store_complex(i,cadd(a,b,lane));
+}
+@compute @workgroup_size(64)
+fn butterfly_pair(@builtin(global_invocation_id) id:vec3u,@builtin(num_workgroups) groups:vec3u,@builtin(local_invocation_index) lane:u32) {
+    let i=flat_index(id,groups);if(i>=params.m*params.batches/2u){return;}
+    let j=i%(params.m/2u);let half=params.span/2u;let k=j%half;
+    let base=(i/(params.m/2u))*params.m+(j/half)*params.span+k;
+    var root=table[k*(params.m/params.span)];if((params.flags&1u)!=0u){root=conjugate(root);}
+    let a=load_complex(base);let b=cmul(load_complex(base+half),root,lane);
+    store_complex(base,cadd(a,b,lane));store_complex(base+half,cadd(a,-b,lane));
+}
+// Bit-reversed input makes the first six radix-2 stages independent within
+// each 64-value block. Keep their arithmetic and output ordering unchanged,
+// but exchange values through workgroup memory instead of global ping-pong.
+@compute @workgroup_size(64)
+fn block_butterfly(@builtin(workgroup_id) group:vec3u,@builtin(num_workgroups) groups:vec3u,@builtin(local_invocation_index) lane:u32) {
+    let base=(group.x+group.y*groups.x)*64u;
+    if(base>=params.m*params.batches){return;}
+    block_values[lane]=load_complex(base+lane);
+    workgroupBarrier();
+    for(var span=2u;span<=64u;span*=2u){
+        if(lane<32u){
+            let half=span/2u;let k=lane%half;let at=(lane/half)*span+k;
+            var root=table[k*(params.m/span)];
+            if((params.flags&1u)!=0u){root=conjugate(root);}
+            let a=block_values[at];let b=cmul(block_values[at+half],root,lane);
+            block_values[at]=cadd(a,b,lane);
+            block_values[at+half]=cadd(a,-b,lane);
+        }
+        workgroupBarrier();
+    }
+    store_complex(base+lane,block_values[lane]);
 }
 @compute @workgroup_size(64)
 fn multiply(@builtin(global_invocation_id) id:vec3u,@builtin(num_workgroups) groups:vec3u,@builtin(local_invocation_index) lane:u32) {

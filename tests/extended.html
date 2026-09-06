@@ -12,7 +12,7 @@ try {
   device.addEventListener('uncapturederror', event => {fatal = event.error;});
   const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST;
   const offset = device.limits.minStorageBufferOffsetAlignment;
-  async function execute(n, paired, transform, inverse, input, batchCount, native) {
+  async function execute(n, paired, transform, inverse, input, batchCount, native, optimized=true) {
     const outputCount = transform === 'r2c' ? 4 * (Math.floor(n / 2) + 1) : transform === 'c2r' ? 2 * n : 4 * n;
     const outputBytes = outputCount * batchCount * 4;
     const a = device.createBuffer({size: offset + input.byteLength, usage});
@@ -26,7 +26,7 @@ try {
       device.queue.writeBuffer(b, offset + outputBytes, new Uint32Array(64).fill(0x12345678));
       if (native) binding = await nativeBinding(native, a, b, input.byteLength, outputBytes, batchCount);
       else {
-        plan = await FFTPlan.create(device, {length: n, precision: paired ? 'paired-f32' : 'f32', transform, inverse});
+        plan = await FFTPlan.create(device, {length: n, precision: paired ? 'paired-f32' : 'f32', transform, inverse, optimized});
         binding = plan.bind(a, b, {batchCount, inputOffset: offset, outputOffset: offset});
       }
       // Reuse the same binding twice, including two encodings in one encoder.
@@ -105,6 +105,12 @@ try {
     for (const inverse of [false, true]) {
       const input = samples(n, batchCount, 4, paired);
       const output = await execute(n, paired, 'c2c', inverse, input, batchCount);
+      if(n>256 && n<=4096){
+        const generic=await execute(n,paired,'c2c',inverse,input,batchCount,null,false);
+        const a=new Uint32Array(output.buffer),b=new Uint32Array(generic.buffer);
+        if(!a.every((word,i)=>word===b[i]))throw Error(`Optimized/generic word mismatch n=${n} paired=${paired} inverse=${inverse}`);
+        line(`PASS exact optimized/generic words n=${n} paired=${paired} inverse=${inverse}`);
+      }
       let max = 0;
       for (let batch = 0; batch < batchCount; ++batch) for (const k of frequencies(n)) {
         const i = 4 * (batch * n + k);

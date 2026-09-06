@@ -25,7 +25,9 @@ and prime lengths. It does not yet tune algorithms to individual adapters.
   in JS plan/shader options or `.optimized = false` in C++ `Options` for the
   unchanged generic reference. The low-level C++ form is
   `shader(length, paired, inverse, false)`. This switch affects N≤256 only;
-  large-transform algorithms are unchanged. Scalar f32 retains the exact generic
+  large transforms also use fused workgroup stages and shared-product
+  butterflies by default; `optimized: false` retains their multipass reference.
+  Scalar f32 small transforms retain the exact generic
   kernel even when optimization is enabled: specialization regressed larger
   scalar batches on the qualified adapter. Optimized paired arithmetic changes the
   reduction order, so it is not bit-identical to the generic reference.
@@ -228,6 +230,17 @@ encoding/submission), **not GPU timestamp queries**; compilation, allocation,
 uploads, and readbacks are excluded. Do not run other GPU work concurrently.
 URL parameters choose length, batches, and repetitions. Results are hardware
 and browser dependent; correctness tests make no timing claims.
+
+`/profile.html` adds GPU timestamp timing (when supported), host encoding time,
+and balanced alternating optimized/reference measurements. It reports min,
+max, median and average across eight warmed samples. Parameters include
+`lengths=1024,1009,4096`, `precision=paired-f32`, `transform=r2c`, `batch=128`,
+and `repeats=30`. A sample repeats device-resident transforms in one compute
+pass; GPU time includes dispatch gaps, not setup/uploads/readback. Wall time
+includes queue completion but excludes the later timestamp mapping. Optional
+`reference=../previous-build/src/index.js` compares against a previous optimized
+build instead of the generic kernel. `scripts/run_browser.mjs` automates these
+standalone pages through a user-provided Chrome debugging port.
 
 The numerical kernels in `shaders/` are shared by the two language frontends.
 After editing them run `npm run generate`; generated C++/JS embeddings are
