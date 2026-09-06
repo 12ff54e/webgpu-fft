@@ -1,5 +1,53 @@
 # Qualification record
 
+## Whole-butterfly ownership for small paired FFTs (2026-09-06)
+
+Even paired transforms with N≥36 now assign complete radix-2/radix-3
+butterflies to lanes. A lane loads its disjoint input set before writing any
+outputs; only the stage-end workgroup fence is required. Radix 3 shares its
+pair, center and skew intermediates across all three outputs, without
+reordering any output's paired operations. The final stage still writes
+natural-order output directly. Scalar shaders, odd lengths and N<36 retain
+the previous specialized/generic policy. Experiments at N=16 and N=32
+regressed and were rejected; the odd N=243 experiment showed no useful gain.
+
+Standalone Chrome/RTX 3060 Ti GPU-timestamp comparisons against the
+**previous optimized** build (not the slower generic kernel), eight balanced
+alternating samples, 30 transforms/sample, same resident inputs:
+
+| N | Batches | Previous GPU median ms | New GPU median ms | Speedup |
+| ---: | ---: | ---: | ---: | ---: |
+| 36 | 4096 | 0.4349 | 0.3107 | 1.40× |
+| 48 | 4096 | 0.2993 | 0.1944 | 1.54× |
+| 64 | 4096 | 0.1668 | 0.1275 | 1.31× |
+| 72 | 3640 | 0.3560 | 0.2291 | 1.55× |
+| 96 | 2730 | 0.2567 | 0.1899 | 1.35× |
+| 128 | 2048 | 0.1964 | 0.1507 | 1.30× |
+| 192 | 1365 | 0.6699 | 0.4207 | 1.59× |
+| 256 | 1024 | 0.5983 | 0.4635 | 1.29× |
+| 36 | 31680 | 1.8279 | 1.2332 | 1.48× |
+
+The large N=36 batch uses the solver's transform dimensions but runs only the
+standalone FFT: no cuMES transfers, projections or iteration controller. Its
+median GPU time fell 32.5%; wall medians were 1.9260 → 1.2705 ms. Scheduling
+outliers occurred (previous GPU range 1.816–6.483 ms, new 1.218–1.600 ms);
+the medians should not be presented as universal hardware-independent gains.
+
+All 496 C++/JS small-transform CPU-oracle tests and 248 generic/optimized
+comparisons passed. An optional previous-build comparison additionally
+requires exact words for all 62 paired optimized JS cases; all passed.
+Use `index.html?reference=../previous-build/src/index.js` to reproduce that
+additional check. Evidence: `fft-small-owner-correctness.json`,
+`fft-small-owner-wide-profile.json`, `fft-small-owner-36-large-profile.json`
+under the cuMES workspace's `../tmp` directory.
+
+The final N≥36 gate was rechecked with the same 496 small tests, 248
+generic comparisons and 62 exact previous-optimized comparisons. The 197
+extended cases (including real packing and upper-limit lengths) and all 12
+actual Emdawnwebgpu C++ runtime cases also passed with both optimizations
+enabled. Final evidence: `fft-final-small-correctness.json`,
+`fft-final-extended.json`, `fft-final-cpp.json` in the same directory.
+
 ## Standalone large-transform optimization (2026-09-06)
 
 No cuMES solver execution is included in these measurements. Large optimized

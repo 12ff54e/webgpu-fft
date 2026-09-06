@@ -12,7 +12,9 @@ assert.match(generic,/for\(var p=0u/);
 assert.doesNotMatch(generic,/radix_three/);
 assert.match(optimized,/radix_three/);
 assert.equal(program({length:36,precision:'paired-f32',optimized:false}).small_code,generic);
-assert.equal((generic.match(/workgroupBarrier\(\)/g)||[]).length-(optimized.match(/workgroupBarrier\(\)/g)||[]).length,2);
+assert.equal((generic.match(/workgroupBarrier\(\)/g)||[]).length-(optimized.match(/workgroupBarrier\(\)/g)||[]).length,5);
+assert.match(optimized,/if\(lane</);
+for(const length of [16,27,32,34,243])assert.doesNotMatch(shader({length,precision:'paired-f32'}),/if\(lane</);
 for(let n=2;n<=256;n++)for(const inverse of [false,true])
   assert.equal(shader({length:n,inverse,optimized:true}),shader({length:n,inverse,optimized:false}));
 assert.throws(() => shader({length: 36, transform: 'r2c'}), TypeError);

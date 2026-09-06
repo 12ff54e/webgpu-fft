@@ -73,6 +73,58 @@ inline std::string shader(int length,
     int span = length;
     for (int radix : radices) {
         const int step = span / radix;
+        if (optimized && length >= 36 && length % 2 == 0 &&
+            (radix == 2 || radix == 3)) {
+            // One lane owns a whole butterfly: its input/output locations
+            // are disjoint from other lanes, so only a stage-end fence is
+            // needed. Preserve each output's paired arithmetic ordering.
+            out << "{if(lane<" << length / radix << "u){let block=lane/" << step
+                << "u;let j=lane%" << step << "u;let start=block*" << span
+                << "u+j;\n"
+                << "let a=values[start];let b=values[start+" << step << "u];\n";
+            if (radix == 2) {
+                out << "let s0=cadd(a,b,lane);let s1=cadd(a,-b,lane);\n";
+            } else {
+                out << "let c=values[start+" << 2 * step
+                    << "u];let pair=cadd(b,c,lane);let s0=cadd(a,pair,lane);\n"
+                    << "let "
+                       "center=cadd(a,cscale(pair,vec2f(-0.5,0.0),lane),lane);"
+                       "\n"
+                    << "let "
+                       "skew=rotate_i(cscale(cadd(b,-c,lane),SQRT_THREE_OVER_"
+                       "TWO,lane));\n"
+                    << "let s1=cadd(center," << (inverse ? "" : "-")
+                    << "skew,lane);let s2=cadd(center," << (inverse ? "-" : "")
+                    << "skew,lane);\n";
+            }
+            for (int q = 0; q < radix; ++q) {
+                out << "{let position=start+" << q * step
+                    << "u;let value=twiddle(s" << q << ",(" << q * length / span
+                    << "u*j)%N,lane);\n";
+                if (step == 1) {
+                    out << "var index=0u;var k=position;\n";
+                    int digit_span = length, weight = 1;
+                    for (int r : radices) {
+                        digit_span /= r;
+                        out << "index+=(k/" << digit_span << "u)*" << weight
+                            << "u;k%=" << digit_span << "u;\n";
+                        weight *= r;
+                    }
+                    if (inverse) {
+                        const double scale = 1.0 / length;
+                        const float hi = static_cast<float>(scale);
+                        out << "output[base+index]=cscale(value,vec2f(" << hi
+                            << "f," << static_cast<float>(scale - hi)
+                            << "f),lane);}\n";
+                    } else
+                        out << "output[base+index]=value;}\n";
+                } else
+                    out << "values[position]=value;}\n";
+            }
+            out << (step == 1 ? "}}\n" : "}workgroupBarrier();}\n");
+            span = step;
+            continue;
+        }
         if (optimized) {
             out << "{let block=lane/" << span << "u;let j=lane%" << step
                 << "u;let q=(lane%" << span << "u)/" << step << "u;\n"

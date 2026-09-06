@@ -43,6 +43,26 @@ let base=group.x*N;values[lane]=input[base+lane];workgroupBarrier();\n`;
   let span = n;
   for (const radix of radices) {
     const step = span / radix;
+    if(optimized && n>=36 && n%2===0 && (radix===2 || radix===3)){
+      code+=`{if(lane<${n/radix}u){let block=lane/${step}u;let j=lane%${step}u;let start=block*${span}u+j;\n`;
+      code+=`let a=values[start];let b=values[start+${step}u];\n`;
+      if(radix===2)code+='let s0=cadd(a,b,lane);let s1=cadd(a,-b,lane);\n';
+      else {
+        code+=`let c=values[start+${2*step}u];let pair=cadd(b,c,lane);let s0=cadd(a,pair,lane);\n`;
+        code+='let center=cadd(a,cscale(pair,vec2f(-0.5,0.0),lane),lane);\n';
+        code+='let skew=rotate_i(cscale(cadd(b,-c,lane),SQRT_THREE_OVER_TWO,lane));\n';
+        code+=`let s1=cadd(center,${inverse?'':'-'}skew,lane);let s2=cadd(center,${inverse?'-':''}skew,lane);\n`;
+      }
+      for(let q=0;q<radix;q++){
+        code+=`{let position=start+${q*step}u;let value=twiddle(s${q},(${q*n/span}u*j)%N,lane);\n`;
+        if(step===1){
+          code+='var index=0u;var k=position;\n';let digitSpan=n,weight=1;
+          for(const r of radices){digitSpan/=r;code+=`index+=(k/${digitSpan}u)*${weight}u;k%=${digitSpan}u;\n`;weight*=r;}
+          code+=inverse?`output[base+index]=cscale(value,vec2f(${f(1/n)},${f(1/n-Math.fround(1/n))}),lane);}\n`:'output[base+index]=value;}\n';
+        }else code+='values[position]=value;}\n';
+      }
+      code+=step===1?'}}\n':'}workgroupBarrier();}\n';span=step;continue;
+    }
     if(optimized){
       code+=`{let block=lane/${span}u;let j=lane%${step}u;let q=(lane%${span}u)/${step}u;\nlet start=block*${span}u+j;\n`;
       if(radix===2)code+=`let sum=cadd(values[start],select(values[start+${step}u],-values[start+${step}u],q!=0u),lane);\n`;

@@ -9,6 +9,9 @@ try {
   const device = await adapter.requestDevice();
   device.addEventListener('uncapturederror', event => { throw event.error; });
   const cases = await (await fetch('cases.json')).json();
+  const reference=new URLSearchParams(location.search).get('reference');
+  const PreviousPlan=reference&&(await import(reference)).FFTPlan;
+  let exactComparisons=0;
   const genericResults=new Map();let comparisons=0,maxDifference=0;
   for (const test of cases) for (const implementation of ['cpp', 'js']) {
     const {n,paired,inverse,shader,optimized} = test;
@@ -37,7 +40,17 @@ try {
     }
     encoder.copyBufferToBuffer(b,offset,read,0,input.byteLength);device.queue.submit([encoder.finish()]);
     await read.mapAsync(GPUMapMode.READ);
-    const actual=new Float32Array(read.getMappedRange());let error=0;
+    const actual=new Float32Array(read.getMappedRange()).slice();read.unmap();let error=0;
+    if(PreviousPlan && implementation==='js' && optimized && paired){
+      const plan=await PreviousPlan.create(device,{length:n,precision:'paired-f32',inverse:Boolean(inverse)});
+      const binding=plan.bind(a,b,{batchCount:batch,inputOffset:offset,outputOffset:offset});
+      const commands=device.createCommandEncoder();binding.encode(commands);
+      commands.copyBufferToBuffer(b,offset,read,0,input.byteLength);device.queue.submit([commands.finish()]);
+      await read.mapAsync(GPUMapMode.READ);
+      const previous=new Uint32Array(read.getMappedRange()),words=new Uint32Array(actual.buffer);
+      if(!words.every((word,i)=>word===previous[i]))throw Error(`previous optimized word mismatch n=${n} inverse=${inverse}`);
+      read.unmap();binding.destroy();plan.destroy();exactComparisons++;
+    }
     for(let seq=0;seq<batch;seq++) for(let k=0;k<n;k++) {
       let real=0,imag=0;
       for(let j=0;j<n;j++) {const angle=(inverse?2:-2)*Math.PI*j*k/n,co=Math.cos(angle),si=Math.sin(angle),i=4*(seq*n+j),r=input[i]+input[i+2],im=input[i+1]+input[i+3];real+=r*co-im*si;imag+=r*si+im*co;}
@@ -56,11 +69,11 @@ try {
       if(!Number.isFinite(difference)||difference>(paired?3e-11:1e-4))throw Error(`optimized/generic mismatch: ${key} ${difference}`);
       maxDifference=Math.max(maxDifference,difference);comparisons++;genericResults.delete(key);
     }
-    read.unmap();const validation=await device.popErrorScope();if(validation)throw validation;
+    const validation=await device.popErrorScope();if(validation)throw validation;
     if(!Number.isFinite(error)||error>(paired?3e-11:1e-4))throw Error(`FFT n=${n} paired=${paired} inverse=${inverse}: error=${error}`);
     line(`PASS ${implementation} n=${n} paired=${paired} inverse=${inverse} optimized=${optimized} max scaled error=${error.toExponential(3)}`);
     a.destroy();b.destroy();read.destroy();
   }
-  document.body.dataset.status='pass';line(`All ${cases.length*2} FFT tests PASS; ${comparisons} same-input optimized/generic comparisons, max difference=${maxDifference.toExponential(3)}`);
+  document.body.dataset.status='pass';line(`All ${cases.length*2} FFT tests PASS; ${comparisons} same-input optimized/generic comparisons, max difference=${maxDifference.toExponential(3)}; ${exactComparisons} exact previous-optimized comparisons`);
 } catch(error) {document.body.dataset.status='fail';line(error.stack||String(error));}
 </script>

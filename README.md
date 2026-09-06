@@ -21,16 +21,22 @@ and prime lengths. It does not yet tune algorithms to individual adapters.
   not direct quadratic DFTs. Bluestein pads internally without changing the
   requested transform grid or normalization.
 - Paired-f32 small transforms use specialized radix-2/radix-3 butterflies, exact trivial
-  twiddles, and a fused final reorder/store by default. Select `optimized: false`
+  twiddles, and a fused final reorder/store by default. For even N≥36, a lane
+  owns a whole radix-2/radix-3 butterfly, shares its intermediate arithmetic,
+  and needs only one barrier per non-final stage. Shorter and odd transforms
+  retain the previous per-output kernel: ownership regressed the tested
+  single-warp sizes. Select `optimized: false`
   in JS plan/shader options or `.optimized = false` in C++ `Options` for the
   unchanged generic reference. The low-level C++ form is
-  `shader(length, paired, inverse, false)`. This switch affects N≤256 only;
-  large transforms also use fused workgroup stages and shared-product
+  `shader(length, paired, inverse, false)` for the N≤256 single-shader API.
+  Large plans also use fused workgroup stages and shared-product
   butterflies by default; `optimized: false` retains their multipass reference.
   Scalar f32 small transforms retain the exact generic
   kernel even when optimization is enabled: specialization regressed larger
-  scalar batches on the qualified adapter. Optimized paired arithmetic changes the
-  reduction order, so it is not bit-identical to the generic reference.
+  scalar batches on the qualified adapter. Small optimized paired transforms
+  change the reduction order, so they are not bit-identical to the generic
+  reference; the newer butterfly ownership preserves the previous optimized
+  results exactly in qualification tests.
 - Contiguous batches, out of place. Transform kinds: `c2c`, `r2c`, `c2r`.
   No arbitrary strides.
 - One complex sample is four `f32`s: `[real_hi, imag_hi, real_lo, imag_lo]`.

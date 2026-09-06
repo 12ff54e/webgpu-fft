@@ -17,7 +17,7 @@ try{
   console.log(JSON.stringify({target:page.id,url}));let started=false;
   const deadline=Date.now()+600000;
   while(Date.now()<deadline){
-    const state=await evaluate('({ready:document.readyState==="complete",status:document.body?.dataset.status})');
+    const state=await evaluate('({ready:document.readyState==="complete"&&location.href!=="about:blank",status:document.body?.dataset.status})');
     if(state.ready&&!started){await evaluate('document.getElementById("start")?.click()');started=true;}
     if(['pass','fail'].includes(state.status)){
       const result=await evaluate('({status:document.body.dataset.status,log:document.getElementById("log")?.textContent,results:window.fftBenchmarkResults,userAgent:navigator.userAgent})');
